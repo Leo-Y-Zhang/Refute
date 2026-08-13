@@ -14,6 +14,23 @@ Decide whether milestone 1 goes to `main`. Nothing else is outstanding on this
 branch. The two questions that gate the decision are open questions 1 and 2
 below, and both are the owner's, not the code's.
 
+## Verified in CI
+
+The workflow has now run. Run 31729660983 on `9918064`, all five jobs green:
+
+| Job | Result |
+|---|---|
+| `lint` — fmt and clippy on the pinned 1.97.1 | success |
+| `test (ubuntu-latest, stable)` | success, 53 tests |
+| `test (ubuntu-latest, 1.74.0)` | success, 53 tests |
+| `test (windows-latest, stable)` | success, 53 tests |
+| `test (windows-latest, 1.74.0)` | success, 53 tests |
+
+The logs were read, not just the tick: each leg installed the toolchain it
+claims (`rustc 1.74.0 (79e9716c9 2023-11-13)` on both MSRV legs) and reported
+19 + 10 + 12 + 8 + 4 passing. The CRLF fixture guard ran on Windows, which is
+the platform that would have quietly rewritten it.
+
 ## Verified on this machine
 
 - `cargo test --no-fail-fast` — 53 passed, 0 failed, on stable 1.97.1
@@ -61,6 +78,10 @@ described, and `actions/checkout` is pinned to a commit.
 
 ## Not verified
 
+- A local ref, `backup/pre-filter-branch`, still points at the pre-rewrite
+  history and so still contains the `.pyc`. It is local only, was never pushed,
+  and the branch that was pushed is clean at every commit. Delete it with
+  `git branch -D backup/pre-filter-branch` when the rewrite is trusted.
 - Behaviour on a proof larger than ~100 KB. The largest artefact checked end to
   end is 97 KB / 980 lemmas. Milestone 3 is where 200 MB gets tested.
 - Anything about RAT. Milestone 1b.
