@@ -759,6 +759,7 @@ None; there is no database. The part-1 equivalents stand, with one addition:
 | # | Change | Reversible? | Rollback |
 |---|---|---|---|
 | 3 | `Unsupported::RatHints` / `EmptyHints` removed, `BinaryProof` added | Yes | `git revert`. A library API change in a 0.1.0 crate with no dependants; the CLI's exit codes and verdict strings do not move, so no consumer contract does |
+| 4 | `Limits` gains `max_line_bytes`, and `ParseErrorKind` gains `LineTooLong` | Yes | `git revert`. Both are additive to a 0.1.0 crate with no dependants, and neither is reachable from a proof any producer writes — the default is seventy thousand times the longest line ever measured. A struct literal building `Limits` without `..Default::default()` would stop compiling; every one in this repository uses it |
 
 ## Failure modes
 
