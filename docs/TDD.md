@@ -286,7 +286,8 @@ Each is a deterministic mutation of P1 or a larger real proof, produced by
 | B9 | Missing trailing `0` on the last step | `ParseError` |
 | B10 | Deletion of an id never added | Accepted, counted in `--stats` |
 | B11 | Deletion of the same id twice | Accepted, counted |
-| B12 | A real `drat-trim` proof containing RAT lines | `Unsupported(RatHints)`, exit 2, and asserted **not** exit 0 |
+| B12 | A real `drat-trim` proof containing RAT lines | `Unsupported`, exit 2, and asserted **not** exit 0. **Corrected during the build:** this cannot report `RatHints`. In every instance measured — pigeonhole 5x4, 6x5, 7x6, 8x7 — the first unsupported construct is an *empty hint list*, on line 2, every time, because the RAT blocks resolve against exactly those lemmas. B12 asserts `EmptyHints { line: 2 }` |
+| B12b | A single RAT resolvent block, copied verbatim out of that same proof | `Unsupported(RatHints)`, exit 2, not exit 0. Added because otherwise the `RatHints` path is never reached by any real file |
 | B13 | 100k-variable formula, 50k-step proof | Completes; asserts the trail unwind is not O(vars) per step (time bound in the test) |
 
 ### CLI-level
@@ -341,6 +342,7 @@ or it is a lie by omission.
    author's vdW formulas use a few thousand variables. 2^26 is generous; 2^22
    would be safer for a browser. Needs one decision, and M4 can override it per
    platform. *Does not block the build — the type exists either way.*
-3. **`rust-version = "1.74"` is a guess** until CI runs that toolchain. If step 9
-   fails, the answer is to raise the floor to what actually compiles and say so,
-   never to delete the CI job.
+3. ~~**`rust-version = "1.74"` is a guess** until CI runs that toolchain.~~
+   **Closed during the build.** The whole suite was run on 1.74.0 locally —
+   42 passed, 0 failed — before the CI job was written, so the floor is
+   measured. CI runs the same leg so it stays measured.
