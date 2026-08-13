@@ -30,10 +30,13 @@ fn main() -> ExitCode {
 fn run() -> u8 {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let mut positional: Vec<&str> = Vec::new();
-    let mut stats = false;
-    for arg in &args {
-        match arg.as_str() {
+    // Help and version are answered only when they are the whole command line.
+    // Honouring them from anywhere in argv means `refute a.cnf a.lrat --help`
+    // exits 0 with nothing checked, and the documented contract is that the
+    // exit code is the verdict: one stray argument in a CI script would read
+    // as a pass for a proof that was never opened.
+    if let [only] = args.as_slice() {
+        match only.as_str() {
             "--help" | "-h" => {
                 println!("{USAGE}");
                 return EXIT_VERIFIED;
@@ -42,7 +45,27 @@ fn run() -> u8 {
                 println!("refute {}", env!("CARGO_PKG_VERSION"));
                 return EXIT_VERIFIED;
             }
+            _ => {}
+        }
+    }
+
+    let mut positional: Vec<&str> = Vec::new();
+    let mut stats = false;
+    let mut flags_ended = false;
+    for arg in &args {
+        if flags_ended {
+            positional.push(arg);
+            continue;
+        }
+        match arg.as_str() {
+            // Everything after `--` is a path, so a file really called
+            // `--help` can still be checked.
+            "--" => flags_ended = true,
             "--stats" => stats = true,
+            "--help" | "-h" | "--version" | "-V" => {
+                eprintln!("{USAGE}");
+                return EXIT_USAGE;
+            }
             other => positional.push(other),
         }
     }

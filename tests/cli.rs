@@ -43,8 +43,9 @@ fn one_argument_prints_usage_and_exits_3() {
     assert!(run.stderr.starts_with("usage: refute"), "{:?}", run.stderr);
 }
 
+/// Asking for help, and nothing else, is not an error.
 #[test]
-fn version_and_help_exit_0() {
+fn version_and_help_alone_exit_0() {
     let version = common::cli_args(&["--version".to_owned()]);
     assert_eq!(version.code, 0);
     assert!(
@@ -56,6 +57,61 @@ fn version_and_help_exit_0() {
     let help = common::cli_args(&["--help".to_owned()]);
     assert_eq!(help.code, 0);
     assert!(help.stdout.contains("usage: refute"), "{:?}", help.stdout);
+}
+
+/// The documented contract is "trust the exit code". A `--help` anywhere in
+/// argv used to short-circuit to 0, so `refute bad.cnf bad.lrat --help` — a
+/// proof this suite proves is bad — reported success for a proof never read.
+/// One stray argument in a CI script is all that takes.
+#[test]
+fn help_or_version_beside_other_arguments_never_exits_0() {
+    let bad_formula = common::fixture("n05_no_empty_clause.cnf")
+        .to_string_lossy()
+        .into_owned();
+    let bad_proof = common::fixture("n05_no_empty_clause.lrat")
+        .to_string_lossy()
+        .into_owned();
+
+    for flag in ["--help", "-h", "--version", "-V"] {
+        let run = common::cli_args(&[bad_formula.clone(), bad_proof.clone(), flag.to_owned()]);
+        assert_ne!(run.code, 0, "{flag} beside a bad proof exited 0");
+        assert_eq!(run.code, 3, "{flag}: stderr was {:?}", run.stderr);
+        assert!(
+            run.stdout.is_empty(),
+            "{flag} printed a verdict: {:?}",
+            run.stdout
+        );
+        assert!(
+            run.stderr.starts_with("usage: refute"),
+            "{flag}: stderr was {:?}",
+            run.stderr
+        );
+    }
+}
+
+/// `--` ends the flags, so a file really called `--help` can still be checked.
+/// Without a terminator the only way to name one is to rename it.
+#[test]
+fn a_double_dash_ends_the_flags() {
+    let run = common::cli_args(&[
+        "--".to_owned(),
+        common::fixture("tiny_unsat.cnf")
+            .to_string_lossy()
+            .into_owned(),
+        common::fixture("tiny_unsat.lrat")
+            .to_string_lossy()
+            .into_owned(),
+    ]);
+    run.assert("s VERIFIED", 0);
+
+    let as_a_path =
+        common::cli_args(&["--".to_owned(), "--help".to_owned(), "--version".to_owned()]);
+    assert_eq!(as_a_path.code, 3, "stderr was {:?}", as_a_path.stderr);
+    assert!(
+        as_a_path.stderr.contains("cannot open '--help'"),
+        "after -- a flag is a path; stderr was {:?}",
+        as_a_path.stderr
+    );
 }
 
 /// A verdict must survive `refute a.cnf b.lrat > log.txt`. No colour, no

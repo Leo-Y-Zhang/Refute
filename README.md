@@ -44,6 +44,11 @@ would also match `NOT VERIFIED`, so test the exit code, never the string alone.
 refute <formula.cnf> <proof.lrat> [--stats]
 ```
 
+`--help` and `--version` are answered only when one of them is the whole command
+line. Beside anything else they are a usage error and exit 3, because the exit
+code is the verdict and a flag must never stand in for a check that did not
+happen. `--` ends the flags, so a file called `--help` can still be checked.
+
 Produce the inputs with any solver that emits DRAT, then convert:
 
 ```
