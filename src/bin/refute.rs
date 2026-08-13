@@ -5,11 +5,11 @@
 //! verdict survives `refute a.cnf b.lrat > log.txt`.
 
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::path::Path;
 use std::process::ExitCode;
 
-use refute::{check, parse_dimacs, Limits, LratReader, Verdict};
+use refute::{check_readers, Limits, Verdict};
 
 const USAGE: &str = "usage: refute <formula.cnf> <proof.lrat> [--stats]";
 
@@ -46,7 +46,6 @@ fn run() -> u8 {
             other => positional.push(other),
         }
     }
-    let _ = stats;
 
     let (formula_path, proof_path) = match positional.as_slice() {
         [formula, proof] => (Path::new(formula), Path::new(proof)),
@@ -71,37 +70,44 @@ fn run() -> u8 {
         }
     };
 
-    let limits = Limits::default();
+    let outcome = check_readers(
+        BufReader::new(formula_file),
+        BufReader::new(proof_file),
+        &Limits::default(),
+    );
 
-    let cnf = match parse_dimacs(BufReader::new(formula_file), &limits) {
-        Ok(cnf) => cnf,
-        Err(err) => {
-            // A formula we cannot read is a proof we cannot accept.
-            return report_not_verified(&err.to_string());
-        }
-    };
-    for warning in &cnf.warnings {
+    for warning in &outcome.warnings {
         eprintln!("refute: warning: {warning}");
     }
+    if stats {
+        let counters = outcome.stats;
+        eprintln!(
+            "refute: {} additions, {} deletions, {} hints resolved, \
+             {} peak live clauses, {} unknown deletions",
+            counters.additions,
+            counters.deletions,
+            counters.hints_resolved,
+            counters.peak_live_clauses,
+            counters.unknown_deletions
+        );
+    }
 
-    let proof = LratReader::new(BufReader::new(proof_file), &limits);
-    match check(&cnf, proof, &limits) {
+    // One match, no wildcard arm: a new verdict variant must be handled here
+    // rather than falling silently into the success branch.
+    match outcome.verdict {
         Verdict::Verified => {
             println!("s VERIFIED");
             EXIT_VERIFIED
         }
-        Verdict::NotVerified(rejection) => report_not_verified(&rejection.to_string()),
+        Verdict::NotVerified(rejection) => {
+            println!("s NOT VERIFIED");
+            eprintln!("refute: {rejection}");
+            EXIT_NOT_VERIFIED
+        }
         Verdict::Unsupported(unsupported) => {
             println!("s UNSUPPORTED");
             eprintln!("refute: {unsupported}");
             EXIT_UNSUPPORTED
         }
     }
-}
-
-fn report_not_verified(detail: &str) -> u8 {
-    println!("s NOT VERIFIED");
-    eprintln!("refute: {detail}");
-    let _ = std::io::stdout().flush();
-    EXIT_NOT_VERIFIED
 }

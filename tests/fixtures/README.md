@@ -17,6 +17,7 @@ not formatting — `b08_crlf` exists specifically to check CRLF handling.
 | `tiny_unsat` | `kissat --no-binary` then `drat-trim -L`, 3 variables, all 8 clauses |
 | `deletes_originals` | ditto, pigeonhole 4 into 3: 44 additions, 43 deletions, no unsupported construct |
 | `real_rat_proof` | ditto, pigeonhole 5 into 4: contains both an empty hint list and RAT resolvent blocks |
+| `random_unsat` | ditto, random 3-SAT just above the threshold: 980 RUP lemmas, 13,351 hints, no unsupported construct. The instance comes from an explicit linear congruential sequence, not Python's `random`, whose internals are not a stability contract across versions |
 | `unit_chain` | hand-built hint lists over a real formula; the same lemma sequence in DRAT form is verified by `drat-trim` during generation |
 | `taut_lemma` | `deletes_originals` with one tautological lemma spliced in before the last step |
 | `empty_clause_in_cnf` | hand-built; `drat-trim` reports "trivial UNSAT" and emits an empty LRAT file, so there is nothing to capture |

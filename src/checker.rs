@@ -1,21 +1,60 @@
 //! The forward LRAT checker.
+//!
+//! One pass, forward, streaming. No watched literals, no occurrence lists, no
+//! propagation engine. That is the whole reason to do LRAT before DRAT: with
+//! hints, checking a step is a bounded walk over a list, and the soundness
+//! argument fits in a paragraph.
 
+use std::collections::HashMap;
 use std::io::BufRead;
 
 use crate::cnf::{parse_dimacs, Cnf, Warning};
 use crate::limits::Limits;
-use crate::lrat::LratReader;
-use crate::verdict::{Reason, Rejection, Verdict};
+use crate::lit::{Clause, ClauseId, Lit};
+use crate::lrat::{Hints, LratReader, Step};
+use crate::verdict::{Reason, Rejection, Unsupported, Verdict};
+
+/// Unassigned.
+const UNSET: u8 = 0;
+/// The variable is assigned true.
+const VAR_TRUE: u8 = 1;
+/// The variable is assigned false.
+const VAR_FALSE: u8 = 2;
+
+/// Counters for `--stats`. Cheap enough to keep unconditionally.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    /// Addition steps checked.
+    pub additions: u64,
+    /// Deletion steps processed.
+    pub deletions: u64,
+    /// Hint lookups resolved against the clause database.
+    pub hints_resolved: u64,
+    /// Largest number of clauses alive at once. The number that decides
+    /// whether a proof fits in a browser tab.
+    pub peak_live_clauses: usize,
+    /// Deletions naming an identifier that was not present. Counted, not
+    /// rejected: see the note on `Delete` handling below.
+    pub unknown_deletions: u64,
+}
+
+/// Everything one run produces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outcome {
+    /// The verdict.
+    pub verdict: Verdict,
+    /// Non-fatal oddities in the formula, for the caller to print.
+    pub warnings: Vec<Warning>,
+    /// Counters.
+    pub stats: Stats,
+}
 
 /// Checks `proof` against `cnf`.
 ///
 /// Total: returns a verdict for every input, including garbage. Never panics,
 /// never allocates unboundedly, never reads past the first failing step.
 pub fn check<R: BufRead>(cnf: &Cnf, proof: LratReader<R>, limits: &Limits) -> Verdict {
-    // STUB — build order step 7 implements this. It verifies everything, which
-    // is precisely what makes every negative test of step 3 discriminating.
-    let _ = (cnf, proof, limits);
-    Verdict::Verified
+    check_with_stats(cnf, proof, limits).0
 }
 
 /// Parses a formula and checks a proof against it, in one call.
@@ -24,23 +63,316 @@ pub fn check<R: BufRead>(cnf: &Cnf, proof: LratReader<R>, limits: &Limits) -> Ve
 /// here rather than in `main`, so that it is covered by the test suite and so
 /// that the milestone-4 WASM entry point cannot accidentally differ from the
 /// CLI. Warnings are returned for the caller to print; the library never does.
-pub fn check_readers<F: BufRead, P: BufRead>(
-    formula: F,
-    proof: P,
-    limits: &Limits,
-) -> (Verdict, Vec<Warning>) {
+pub fn check_readers<F: BufRead, P: BufRead>(formula: F, proof: P, limits: &Limits) -> Outcome {
     let cnf = match parse_dimacs(formula, limits) {
         Ok(cnf) => cnf,
         Err(err) => {
-            let rejection = Rejection {
-                step: None,
-                line: 0,
-                reason: Reason::Parse(err),
-            };
-            return (Verdict::NotVerified(rejection), Vec::new());
+            return Outcome {
+                verdict: Verdict::NotVerified(Rejection {
+                    step: None,
+                    line: 0,
+                    reason: Reason::Parse(err),
+                }),
+                warnings: Vec::new(),
+                stats: Stats::default(),
+            }
         }
     };
     let warnings = cnf.warnings.clone();
-    let verdict = check(&cnf, LratReader::new(proof, limits), limits);
-    (verdict, warnings)
+    let (verdict, stats) = check_with_stats(&cnf, LratReader::new(proof, limits), limits);
+    Outcome {
+        verdict,
+        warnings,
+        stats,
+    }
+}
+
+/// [`check`], with the counters.
+pub fn check_with_stats<R: BufRead>(
+    cnf: &Cnf,
+    proof: LratReader<R>,
+    limits: &Limits,
+) -> (Verdict, Stats) {
+    let mut state = Checker::new(cnf, limits);
+    let verdict = state.run(proof);
+    (verdict, state.stats)
+}
+
+struct Checker {
+    db: HashMap<ClauseId, Clause>,
+    assign: Vec<u8>,
+    trail: Vec<u32>,
+    last_added_id: ClauseId,
+    max_var: u32,
+    stats: Stats,
+}
+
+impl Checker {
+    fn new(cnf: &Cnf, limits: &Limits) -> Self {
+        let mut db = HashMap::with_capacity(cnf.clauses.len());
+        for (position, clause) in cnf.clauses.iter().enumerate() {
+            // Identifiers are one-based positions, which is what LRAT hints
+            // refer to. `position` is bounded by the file length.
+            let id = ClauseId::try_from(position).unwrap_or(ClauseId::MAX);
+            db.insert(id.saturating_add(1), clause.clone());
+        }
+        let max_var = cnf.num_vars.min(limits.max_var);
+        let size = usize::try_from(max_var)
+            .unwrap_or(usize::MAX)
+            .saturating_add(1);
+        Self {
+            last_added_id: ClauseId::try_from(cnf.clauses.len()).unwrap_or(ClauseId::MAX),
+            stats: Stats {
+                peak_live_clauses: db.len(),
+                ..Stats::default()
+            },
+            db,
+            assign: vec![UNSET; size],
+            trail: Vec::new(),
+            max_var,
+        }
+    }
+
+    fn run<R: BufRead>(&mut self, proof: LratReader<R>) -> Verdict {
+        for step in proof {
+            let step = match step {
+                Ok(step) => step,
+                // Fail closed: a proof we cannot read is a proof we cannot
+                // accept. The error carries its own line number.
+                Err(err) => {
+                    return Verdict::NotVerified(Rejection {
+                        step: None,
+                        line: 0,
+                        reason: Reason::Parse(err),
+                    })
+                }
+            };
+            match step {
+                Step::Delete { ids, .. } => {
+                    self.stats.deletions = self.stats.deletions.saturating_add(1);
+                    for id in ids {
+                        if self.db.remove(&id).is_none() {
+                            // Permissive, and sound: deletion only ever removes
+                            // tools from the checker. A spurious deletion can
+                            // cause a later MissingHint but can never cause a
+                            // false VERIFIED, and rejecting it would refuse
+                            // other producers' output for no safety gain.
+                            self.stats.unknown_deletions =
+                                self.stats.unknown_deletions.saturating_add(1);
+                        }
+                    }
+                }
+                Step::Add {
+                    id,
+                    lits,
+                    hints,
+                    line,
+                } => {
+                    if let Some(verdict) = self.add(id, lits, hints, line) {
+                        return verdict;
+                    }
+                }
+            }
+        }
+        Verdict::NotVerified(Rejection {
+            step: None,
+            line: 0,
+            reason: Reason::NoEmptyClause,
+        })
+    }
+
+    /// Returns `Some` when the run is over, `None` to continue.
+    fn add(&mut self, id: ClauseId, lits: Vec<Lit>, hints: Hints, line: u64) -> Option<Verdict> {
+        // Classified before anything else, and before RUP is attempted on it:
+        // running RUP on a lemma whose hints we do not understand would reject
+        // a valid proof, and accepting it would accept anything.
+        let hints = match hints {
+            Hints::Rat => return Some(Verdict::Unsupported(Unsupported::RatHints { line })),
+            Hints::Empty => return Some(Verdict::Unsupported(Unsupported::EmptyHints { line })),
+            Hints::Rup(hints) => hints,
+        };
+
+        let reject = |reason: Reason| {
+            Some(Verdict::NotVerified(Rejection {
+                step: Some(id),
+                line,
+                reason,
+            }))
+        };
+
+        if id <= self.last_added_id {
+            return reject(Reason::NonMonotonicId {
+                got: id,
+                previous: self.last_added_id,
+            });
+        }
+        if self.db.contains_key(&id) {
+            return reject(Reason::DuplicateId(id));
+        }
+        self.stats.additions = self.stats.additions.saturating_add(1);
+
+        if let Err(reason) = self.check_rup(&lits, &hints) {
+            return reject(reason);
+        }
+
+        self.last_added_id = id;
+        let derived_empty_clause = lits.is_empty();
+        self.db.insert(id, lits.into_boxed_slice());
+        self.stats.peak_live_clauses = self.stats.peak_live_clauses.max(self.db.len());
+
+        if derived_empty_clause {
+            return Some(self.finish_with_empty_clause());
+        }
+        None
+    }
+
+    /// The only place in this crate that produces a verdict of `Verified`.
+    ///
+    /// Called from exactly one site, immediately after the step that added the
+    /// empty clause returned `Ok`. `tests/trust_boundary.rs` fails if a second
+    /// site ever appears.
+    fn finish_with_empty_clause(&self) -> Verdict {
+        Verdict::Verified
+    }
+
+    /// The step check, exactly as specified in `docs/TDD.md`.
+    fn check_rup(&mut self, lits: &[Lit], hints: &[ClauseId]) -> Result<(), Reason> {
+        let mark = self.trail.len();
+
+        for lit in lits {
+            match self.value(*lit) {
+                // The complement is already assigned true, so this lemma is a
+                // tautology. Adding one preserves satisfiability and it can
+                // never be the empty clause, so accepting is sound. This is the
+                // one permissive rule on an addition; rejecting would be a
+                // false rejection with no safety benefit.
+                VAR_TRUE => {
+                    self.unwind(mark);
+                    return Ok(());
+                }
+                // A repeated literal. Assigning it again is idempotent.
+                VAR_FALSE => {}
+                _ => self.assign_true(lit.negate()),
+            }
+        }
+
+        let last = hints.len().saturating_sub(1);
+        for (position, hint) in hints.iter().enumerate() {
+            self.stats.hints_resolved = self.stats.hints_resolved.saturating_add(1);
+            let clause = match self.db.get(hint) {
+                Some(clause) => clause.clone(),
+                None => {
+                    self.unwind(mark);
+                    return Err(Reason::MissingHint(*hint));
+                }
+            };
+
+            let mut satisfied = false;
+            let mut free: Option<Lit> = None;
+            let mut free_count: usize = 0;
+            for lit in clause.iter() {
+                match self.value(*lit) {
+                    VAR_TRUE => {
+                        satisfied = true;
+                        break;
+                    }
+                    VAR_FALSE => {}
+                    _ => {
+                        free_count = free_count.saturating_add(1);
+                        if free.is_none() {
+                            free = Some(*lit);
+                        }
+                    }
+                }
+            }
+
+            if satisfied {
+                // In a well-formed derivation no hint is satisfied where it is
+                // used. This is the rule that catches a valid proof of a
+                // different formula.
+                self.unwind(mark);
+                return Err(Reason::HintSatisfied(*hint));
+            }
+            match (free_count, free) {
+                (0, _) => {
+                    self.unwind(mark);
+                    return if position == last {
+                        Ok(())
+                    } else {
+                        // Sound to accept, but a conflict before the last hint
+                        // means the list was reordered or padded, and real
+                        // output never does it.
+                        Err(Reason::EarlyConflict(*hint))
+                    };
+                }
+                (1, Some(lit)) => self.assign_true(lit),
+                _ => {
+                    self.unwind(mark);
+                    return Err(Reason::HintNotUnit(*hint));
+                }
+            }
+        }
+
+        self.unwind(mark);
+        Err(Reason::NoConflict)
+    }
+
+    fn value(&self, lit: Lit) -> u8 {
+        let index = usize::try_from(lit.var()).unwrap_or(usize::MAX);
+        match self.assign.get(index) {
+            Some(&VAR_TRUE) => {
+                if lit.is_negated() {
+                    VAR_FALSE
+                } else {
+                    VAR_TRUE
+                }
+            }
+            Some(&VAR_FALSE) => {
+                if lit.is_negated() {
+                    VAR_TRUE
+                } else {
+                    VAR_FALSE
+                }
+            }
+            _ => UNSET,
+        }
+    }
+
+    fn assign_true(&mut self, lit: Lit) {
+        let var = lit.var();
+        if var > self.max_var {
+            // A literal the formula never mentioned. The parser has already
+            // bounded it by Limits::max_var, so this growth is bounded too.
+            self.max_var = var;
+        }
+        let index = usize::try_from(var).unwrap_or(usize::MAX);
+        if index >= self.assign.len() {
+            self.assign.resize(index.saturating_add(1), UNSET);
+        }
+        if let Some(slot) = self.assign.get_mut(index) {
+            *slot = if lit.is_negated() {
+                VAR_FALSE
+            } else {
+                VAR_TRUE
+            };
+            self.trail.push(var);
+        }
+    }
+
+    /// Unwound in O(assigned), never by clearing the whole vector. Clearing is
+    /// O(vars) per step, which is quadratic on a 100,000-variable formula; B13
+    /// in the test suite is the tripwire.
+    fn unwind(&mut self, mark: usize) {
+        while self.trail.len() > mark {
+            match self.trail.pop() {
+                Some(var) => {
+                    let index = usize::try_from(var).unwrap_or(usize::MAX);
+                    if let Some(slot) = self.assign.get_mut(index) {
+                        *slot = UNSET;
+                    }
+                }
+                None => break,
+            }
+        }
+    }
 }

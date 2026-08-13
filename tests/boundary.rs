@@ -245,14 +245,14 @@ fn b13_large_formula_unwinds_in_time() {
     ));
 
     let started = Instant::now();
-    let (verdict, _) = refute::check_readers(
+    let outcome = refute::check_readers(
         Cursor::new(formula.as_bytes()),
         Cursor::new(proof.as_bytes()),
         &Limits::default(),
     );
     let elapsed = started.elapsed();
 
-    assert_eq!(verdict, Verdict::Verified);
+    assert_eq!(outcome.verdict, Verdict::Verified);
     assert!(
         elapsed.as_secs() < 20,
         "50,000 steps took {elapsed:?}; the unwind is not O(assigned)"

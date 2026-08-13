@@ -63,3 +63,20 @@ fn p5_deletes_originals_verifies() {
     );
     common::cli("deletes_originals.cnf", "deletes_originals.lrat").assert("s VERIFIED", 0);
 }
+
+/// P6. A real random-3-SAT refutation: 980 RUP lemmas, no unsupported
+/// construct anywhere in the file.
+///
+/// Added beyond the five in `docs/TDD.md`. Every other positive fixture is tens
+/// of steps, and a checker that is subtly over-strict passes all of them. This
+/// is the one that would break first, and `drat-trim` verifies the same
+/// artefact, so a disagreement here is a disagreement between two independent
+/// implementations rather than a test of Refute against itself.
+#[test]
+fn p6_random_unsat_verifies() {
+    assert_eq!(
+        common::verdict("random_unsat.cnf", "random_unsat.lrat"),
+        Verdict::Verified
+    );
+    common::cli("random_unsat.cnf", "random_unsat.lrat").assert("s VERIFIED", 0);
+}

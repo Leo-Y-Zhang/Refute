@@ -31,11 +31,12 @@ pub fn verdict(cnf: &str, proof: &str) -> Verdict {
 pub fn checked(cnf: &str, proof: &str) -> (Verdict, Vec<Warning>) {
     let formula = File::open(fixture(cnf)).unwrap();
     let proof = File::open(fixture(proof)).unwrap();
-    refute::check_readers(
+    let outcome = refute::check_readers(
         BufReader::new(formula),
         BufReader::new(proof),
         &Limits::default(),
-    )
+    );
+    (outcome.verdict, outcome.warnings)
 }
 
 pub struct Run {

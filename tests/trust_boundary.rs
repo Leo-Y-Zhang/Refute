@@ -86,18 +86,38 @@ fn verdict_has_no_default_and_no_conversion() {
 
 /// The CLI maps verdicts in one exhaustive match. A wildcard arm would let a
 /// new variant fall silently into the success branch.
+///
+/// Anchored on the `Verdict::Verified` arm rather than on the name of the
+/// function being matched, and the region runs to the end of the file because
+/// the verdict match is the last thing `run` does. Code added after it that
+/// used a wildcard would trip this test spuriously — a false alarm rather than
+/// a missed one, which is the right way round for this particular guard.
 #[test]
 fn the_cli_match_on_verdict_has_no_wildcard_arm() {
     let source = fs::read_to_string(source_root().join("bin").join("refute.rs")).unwrap();
     let code = strip_comments(&source);
+    let arm = code
+        .find("Verdict::Verified =>")
+        .expect("the CLI should match Verdict::Verified explicitly");
     let start = code
-        .find("match check")
-        .expect("the CLI should match on the result of check");
-    let tail = code.get(start..).unwrap();
-    let end = tail.find("\n}").unwrap_or(tail.len());
-    let arm_block = tail.get(..end).unwrap();
+        .get(..arm)
+        .unwrap()
+        .rfind("match ")
+        .expect("the Verified arm should sit inside a match");
+    let region = code.get(start..).unwrap();
+
+    for variant in [
+        "Verdict::Verified",
+        "Verdict::NotVerified",
+        "Verdict::Unsupported",
+    ] {
+        assert!(
+            region.contains(variant),
+            "the verdict match must handle {variant} explicitly"
+        );
+    }
     assert!(
-        !arm_block.contains("_ =>"),
+        !region.contains("_ =>"),
         "the verdict match must stay exhaustive"
     );
 }

@@ -46,6 +46,38 @@ def pigeonhole(pigeons, holes):
     return pigeons * holes, clauses
 
 
+def random_3sat(num_vars, num_clauses, seed):
+    """Random 3-SAT just above the satisfiability threshold.
+
+    The generator is an explicit linear congruential sequence rather than the
+    `random` module, because `random.sample`'s internals are not a stability
+    contract across Python versions and this corpus has to re-derive
+    byte-identically years from now.
+    """
+    state = seed
+    def step():
+        nonlocal state
+        state = (state * 6364136223846793005 + 1442695040888963407) % (1 << 64)
+        return state >> 33
+
+    seen = set()
+    clauses = []
+    while len(clauses) < num_clauses:
+        picked = []
+        while len(picked) < 3:
+            var = step() % num_vars + 1
+            if var not in picked:
+                picked.append(var)
+        clause = tuple(sorted(
+            (-v if step() & 1 else v for v in picked), key=abs
+        ))
+        if clause in seen:
+            continue
+        seen.add(clause)
+        clauses.append(list(clause))
+    return num_vars, clauses
+
+
 def implication_chain(length):
     """(1), (-1 2), ..., (-(n-1) n), (-n). Unsatisfiable by propagation alone."""
     clauses = [[1]]
@@ -64,6 +96,10 @@ INSTANCES = {
     "real_rat_proof": pigeonhole(5, 4),
     # P2: the formula behind the hand-built unit chain.
     "unit_chain": implication_chain(12),
+    # P6: 980 real RUP lemmas and no unsupported construct anywhere. The other
+    # positive fixtures are tens of steps; this one is the evidence that the
+    # strict rules survive a proof of some size.
+    "random_unsat": random_3sat(80, 370, 99),
 }
 
 if __name__ == "__main__":

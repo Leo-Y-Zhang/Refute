@@ -29,7 +29,7 @@ pub mod lrat;
 pub mod parse;
 pub mod verdict;
 
-pub use checker::{check, check_readers};
+pub use checker::{check, check_readers, check_with_stats, Outcome, Stats};
 pub use cnf::{parse_dimacs, Cnf};
 pub use limits::Limits;
 pub use lit::{Clause, ClauseId, Lit};
