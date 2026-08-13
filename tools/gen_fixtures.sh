@@ -78,5 +78,26 @@ echo "validated unit_chain lemma sequence against drat-trim"
 
 python3 "$root/tools/mutate.py" --fixtures "$fixtures" --kissat "$kissat"
 
+# Independent check of the one formula edited by hand: the same lemma sequence
+# in DRAT form, verified by drat-trim against the edited formula. The lemmas are
+# the solver's; only one literal of the formula was written twice. Without this
+# the fixture asserts a proof is valid on my say-so.
+python3 - "$fixtures/dup_literal.lrat" "$work/dup_literal.drat" <<'PY'
+import sys
+with open(sys.argv[1]) as source, open(sys.argv[2], "w", newline="\n") as out:
+    for raw in source:
+        tokens = raw.split()
+        if len(tokens) > 1 and tokens[1] == "d":
+            continue
+        end = tokens.index("0", 1)
+        out.write(" ".join(tokens[1:end] + ["0"]) + "\n")
+PY
+if ! "$drat_trim" "$fixtures/dup_literal.cnf" "$work/dup_literal.drat" \
+    | grep -q '^s VERIFIED'; then
+    echo "dup_literal: drat-trim rejected the proof against the edited formula" >&2
+    exit 1
+fi
+echo "validated dup_literal against drat-trim"
+
 echo
 echo "corpus size: $(du -sk "$fixtures" | cut -f1) KB in $(ls "$fixtures" | wc -l) files"

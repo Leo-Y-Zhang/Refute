@@ -44,7 +44,7 @@ for the length of one run.
 | Structure | Type | Notes |
 |---|---|---|
 | `Lit` | `i32` newtype, non-zero | DIMACS sign convention preserved; `Lit::var() -> u32` |
-| `Clause` | `Box<[Lit]>` | Immutable once stored |
+| `Clause` | `Box<[Lit]>` | Immutable once stored, and duplicate-free: a repeated literal is the same literal, and counting it twice makes a unit clause look non-unit |
 | `ClauseId` | `u64` | LRAT ids are strictly increasing but **sparse** (measured: 2,873 lemmas spanning ids 205..3571) |
 | `ClauseDb` | `HashMap<ClauseId, Clause>` | Sparse ids rule out a plain `Vec`. An arena + index map is a milestone-3 optimisation and must be justified by a benchmark, not by taste |
 | `Assign` | `Vec<u8>` indexed by var, `0` unset / `1` true / `2` false | Sized once from the parsed formula's max variable, grown on demand |
@@ -134,10 +134,12 @@ check_add(id, lits, hints):
   unwind; reject NoConflict
 ```
 
-Then, and only then: `db.insert(id, lits)`; if `lits.is_empty()`, the run is over
-and the verdict is `Verified`.
+Then, and only then: `db.insert(id, normalize(lits))`; if `lits.is_empty()`, the
+run is over and the verdict is `Verified`. `normalize` sorts and deduplicates,
+and every formula clause goes through it on the way into the database too, so
+"exactly 1 free" above counts distinct literals.
 
-Three decisions in there are worth their justification:
+Four decisions in there are worth their justification:
 
 - **Tautologies are accepted, not rejected.** Adding `x ∨ ¬x` preserves
   satisfiability, so accepting is sound, and it can never be the empty clause. It
@@ -149,6 +151,13 @@ Three decisions in there are worth their justification:
 - **`EarlyConflict` is a rejection, not a shortcut.** A conflict before the last
   hint means the hint list was reordered or padded. Accepting it would be sound
   but would blunt the mutation controls, and real output never does it.
+- **Clauses are stored duplicate-free, and tautological clauses are stored as
+  they are.** Without the first, `1 2 -3 -3` has two free literals where the
+  file has one, and a hint that really is unit is rejected — a false rejection,
+  found by differential testing against `drat-trim`. Without the second, a
+  clause holding `l` and `-l` would have to be dropped or rewritten; keeping it
+  costs nothing, because it is satisfied whenever its variable is assigned and
+  has two free literals otherwise, so it can never be unit and never falsified.
 
 ### Deletion semantics
 

@@ -5,7 +5,7 @@ Every mutation here is deterministic: run it twice and you get the same bytes.
 That matters because the committed fixtures are what CI checks, and a fixture
 that drifts is a test that quietly changes what it asserts.
 
-Three fixtures cannot come from a solver and are built here instead. Each says
+Four fixtures cannot come from a solver and are built here instead. Each says
 why in a comment at its construction site:
 
   unit_chain          drat-trim's backward checking trims a chain of unit
@@ -17,6 +17,11 @@ why in a comment at its construction site:
                       checking would trim it if one did.
   empty_clause_in_cnf drat-trim reports 'trivial UNSAT' and emits an empty
                       LRAT file, so there is nothing to capture.
+  dup_literal         no solver writes the same literal twice in one clause,
+                      and drat-trim's output would not preserve it if one did.
+                      The formula is edited by one literal; the proof is the
+                      real one, unchanged, and drat-trim verifies it against
+                      the edited formula during generation.
 
 Usage: mutate.py --fixtures DIR [--kissat PATH]
 """
@@ -85,6 +90,22 @@ def clause_count(cnf_text):
     )
 
 
+def parse_cnf_clauses(cnf_text):
+    """Returns (line index, literals) for every clause, one clause per line.
+
+    Only the generated instances are read here, and instances.py writes one
+    clause per line. A file that does not is rejected rather than guessed at.
+    """
+    clauses = []
+    for index, line in enumerate(cnf_text.splitlines()):
+        if not line.strip() or line.startswith(("c", "p", "%")):
+            continue
+        tokens = line.split()
+        assert tokens[-1] == "0", "clause on line %d does not end its line" % (index + 1)
+        clauses.append((index, [int(t) for t in tokens[:-1]]))
+    return clauses
+
+
 # ------------------------------------------------------------------- helpers
 
 
@@ -141,6 +162,47 @@ def build_empty_clause_in_cnf(out):
     """P4. A formula that already contains the empty clause, refuted in one step."""
     write(os.path.join(out, "empty_clause_in_cnf.cnf"), "p cnf 2 3\n1 0\n-1 2 0\n0\n")
     write(os.path.join(out, "empty_clause_in_cnf.lrat"), "4 0 3 0\n")
+
+
+def build_duplicate_literal(out, base_cnf, base_lrat):
+    """P7. A real formula with one literal written twice, and its real proof.
+
+    A repeated literal is the same literal: `1 2 -3 -3` is the clause `1 2 -3`,
+    so the proof is untouched by the edit -- hints are positions, and the
+    clause's meaning has not changed. Solvers do not emit a repeat, but
+    hand-written and machine-generated formulas do, and a checker that counts
+    free literals rather than distinct ones calls that clause non-unit and
+    rejects a valid proof. gen_fixtures.sh verifies the same lemma sequence in
+    DRAT form against this formula, so the claim that the proof is valid is
+    drat-trim's rather than mine.
+
+    The clause and the literal are found rather than chosen. Under the negated
+    literals of the first addition's lemma, a clause literal is falsified
+    exactly when it appears in that lemma, so the first hint's remaining
+    literal is the one the step propagates -- and that is the one written
+    twice. Duplicating a literal the proof only ever falsifies would prove
+    nothing: a falsified duplicate is still falsified.
+    """
+    cnf_text = read(base_cnf)
+    lrat_text = read(base_lrat)
+    clauses = parse_cnf_clauses(cnf_text)
+    step = next(
+        s for s in parse_lrat(lrat_text) if s[0] == ADD and s[2] and len(s[3]) > 1
+    )
+    _, _, lits, hints = step
+    line_index, clause = clauses[hints[0] - 1]
+    free = [lit for lit in clause if lit not in lits]
+    assert len(free) == 1, "the first hint is not a unit propagation: %r" % (free,)
+
+    doubled = []
+    for lit in clause:
+        doubled.append(lit)
+        if lit == free[0]:
+            doubled.append(lit)
+    lines = cnf_text.splitlines()
+    lines[line_index] = " ".join(str(lit) for lit in doubled) + " 0"
+    write(os.path.join(out, "dup_literal.cnf"), "\n".join(lines) + "\n")
+    write(os.path.join(out, "dup_literal.lrat"), lrat_text)
 
 
 # ------------------------------------------------------------- negatives
@@ -382,6 +444,9 @@ def main():
                      os.path.join(out, "deletes_originals.cnf"),
                      os.path.join(out, "deletes_originals.lrat"))
     build_empty_clause_in_cnf(out)
+    build_duplicate_literal(out,
+                            os.path.join(out, "tiny_unsat.cnf"),
+                            os.path.join(out, "tiny_unsat.lrat"))
     build_negatives(out, "deletes_originals", args.kissat)
     build_boundaries(out,
                      os.path.join(out, "tiny_unsat.cnf"),

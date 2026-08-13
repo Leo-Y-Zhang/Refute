@@ -7,7 +7,9 @@
 
 mod common;
 
-use refute::Verdict;
+use std::io::Cursor;
+
+use refute::{Limits, Verdict};
 
 /// P1. The end-to-end happy path: real `kissat` output, real `drat-trim -L`
 /// output, 3 variables, 8 clauses, small enough to check by eye.
@@ -79,4 +81,41 @@ fn p6_random_unsat_verifies() {
         Verdict::Verified
     );
     common::cli("random_unsat.cnf", "random_unsat.lrat").assert("s VERIFIED", 0);
+}
+
+/// P7. A formula clause with a literal written twice, and its real proof.
+///
+/// `1 2 -3 -3` is the clause `1 2 -3`. The proof is `tiny_unsat`'s, unchanged,
+/// and it propagates `-3` from exactly that clause: a checker counting free
+/// literals rather than distinct ones sees two and calls the hint non-unit.
+/// `drat-trim` verifies the same lemma sequence against this formula during
+/// fixture generation, so the disagreement would be Refute's alone.
+#[test]
+fn p7_repeated_literal_in_a_formula_clause_verifies() {
+    assert_eq!(
+        common::verdict("dup_literal.cnf", "dup_literal.lrat"),
+        Verdict::Verified
+    );
+    common::cli("dup_literal.cnf", "dup_literal.lrat").assert("s VERIFIED", 0);
+}
+
+/// P8. The same defect one step further on: a *lemma* with a repeated literal,
+/// used as a hint by a later step.
+///
+/// Built here rather than in `tools/mutate.py` because there is no provenance
+/// to record — no solver emits such a lemma and `drat-trim`'s LRAT would not
+/// preserve it if one did. What can be borrowed is the verdict: `drat-trim`
+/// verifies the same two lemmas, `1 1 0` and `0`, against this formula.
+#[test]
+fn p8_repeated_literal_in_a_lemma_verifies() {
+    let formula = "p cnf 3 4\n1 2 0\n-2 0\n-1 3 0\n-3 0\n";
+    // Lemma 5 is the unit clause (1) with its literal written twice; step 6
+    // then uses it as the unit hint that starts the final propagation.
+    let proof = "5 1 1 0 1 2 0\n6 0 5 3 4 0\n";
+    let outcome = refute::check_readers(
+        Cursor::new(formula.as_bytes()),
+        Cursor::new(proof.as_bytes()),
+        &Limits::default(),
+    );
+    assert_eq!(outcome.verdict, Verdict::Verified);
 }

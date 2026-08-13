@@ -98,6 +98,30 @@ pub fn check_with_stats<R: BufRead>(
     (verdict, state.stats)
 }
 
+/// Every clause enters the database duplicate-free.
+///
+/// A repeated literal is the same literal: `1 2 -3 -3` is the clause `1 2 -3`.
+/// Counting the repeat as a second free literal calls that clause non-unit
+/// under an assignment that leaves only it free, and rejects a proof
+/// `drat-trim` verifies — measured, and pinned by `p7_repeated_literal_in_a_
+/// formula_clause_verifies`. The trail already treats a repeat in a lemma as
+/// idempotent; the database now agrees with it, so a lemma reused as a hint is
+/// classified the same way its own literals were.
+///
+/// A tautological clause — one holding both `l` and `-l` — is kept as it
+/// stands. It is satisfied whenever its variable is assigned and has two free
+/// literals otherwise, so it can never be unit and never be falsified: it can
+/// only ever cause a rejection, never a verification. Dropping it would be
+/// sound for the same reason deleting a clause is, but it would trade
+/// `HintSatisfied` for `MissingHint` and leave the database saying something
+/// the file did not say.
+fn normalize(lits: &[Lit]) -> Clause {
+    let mut literals = lits.to_vec();
+    literals.sort_unstable();
+    literals.dedup();
+    literals.into_boxed_slice()
+}
+
 struct Checker {
     db: HashMap<ClauseId, Clause>,
     assign: Vec<u8>,
@@ -114,7 +138,7 @@ impl Checker {
             // Identifiers are one-based positions, which is what LRAT hints
             // refer to. `position` is bounded by the file length.
             let id = ClauseId::try_from(position).unwrap_or(ClauseId::MAX);
-            db.insert(id.saturating_add(1), clause.clone());
+            db.insert(id.saturating_add(1), normalize(clause));
         }
         let max_var = cnf.num_vars.min(limits.max_var);
         let size = usize::try_from(max_var)
@@ -217,7 +241,7 @@ impl Checker {
 
         self.last_added_id = id;
         let derived_empty_clause = lits.is_empty();
-        self.db.insert(id, lits.into_boxed_slice());
+        self.db.insert(id, normalize(&lits));
         self.stats.peak_live_clauses = self.stats.peak_live_clauses.max(self.db.len());
 
         if derived_empty_clause {

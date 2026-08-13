@@ -20,6 +20,7 @@ not formatting — `b08_crlf` exists specifically to check CRLF handling.
 | `random_unsat` | ditto, random 3-SAT just above the threshold: 980 RUP lemmas, 13,351 hints, no unsupported construct. The instance comes from an explicit linear congruential sequence, not Python's `random`, whose internals are not a stability contract across versions |
 | `unit_chain` | hand-built hint lists over a real formula; the same lemma sequence in DRAT form is verified by `drat-trim` during generation |
 | `taut_lemma` | `deletes_originals` with one tautological lemma spliced in before the last step |
+| `dup_literal` | `tiny_unsat` with the literal its first propagation depends on written twice, and `tiny_unsat`'s proof unchanged. The clause and the literal are found by `tools/mutate.py`, not chosen; `drat-trim` verifies the same lemma sequence in DRAT form against the edited formula during generation |
 | `empty_clause_in_cnf` | hand-built; `drat-trim` reports "trivial UNSAT" and emits an empty LRAT file, so there is nothing to capture |
 | `n01`–`n11` | deterministic mutations of `deletes_originals` by `tools/mutate.py` |
 | `n10` | the satisfiable formula was found by flipping one literal at a time, in file order, until `kissat` returned SAT — so the claim "this is satisfiable" is a solver's, not the author's |
