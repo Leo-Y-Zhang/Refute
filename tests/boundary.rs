@@ -21,7 +21,7 @@ mod common;
 use std::io::Cursor;
 
 use refute::cnf::Warning;
-use refute::{Limits, ParseError, ParseErrorKind, Reason, Source, Unsupported, Verdict};
+use refute::{Limits, ParseError, ParseErrorKind, Reason, Source, Verdict};
 
 fn parse_error_kind(cnf: &str, proof: &str) -> ParseErrorKind {
     match common::verdict(cnf, proof) {
@@ -381,38 +381,155 @@ fn b16_the_header_does_not_size_the_assignment_vector() {
 
 /// B12. A whole real `drat-trim` proof containing RAT blocks.
 ///
-/// It reports the *empty hint list*, not the RAT block, because in every
-/// instance measured — pigeonhole 5x4 through 8x7 — the first unsupported
-/// construct is an empty hint list on line 2, and the RAT blocks resolve
-/// against exactly those lemmas. What the test locks down is the part that
-/// matters: exit 2, and explicitly not exit 0.
+/// Milestone 1 stopped on its *empty hint list*, on line 2, and printed
+/// `s UNSUPPORTED`: in every instance measured — pigeonhole 5x4 through 8x7 —
+/// the empty hint list comes first, because the RAT blocks resolve against
+/// exactly those lemmas. Both are checked now. P9 asserts the verdict; this
+/// keeps the boundary entry pointing at what changed.
 #[test]
-fn b12_real_proof_with_rat_is_unsupported_not_verified() {
-    let run = common::cli("real_rat_proof.cnf", "real_rat_proof.lrat");
-    assert_ne!(run.code, 0, "a proof we cannot check exited 0");
-    run.assert("s UNSUPPORTED", 2);
-    assert!(matches!(
+fn b12_real_proof_with_rat_verifies() {
+    common::cli("real_rat_proof.cnf", "real_rat_proof.lrat").assert("s VERIFIED", 0);
+    assert_eq!(
         common::verdict("real_rat_proof.cnf", "real_rat_proof.lrat"),
-        Verdict::Unsupported(Unsupported::EmptyHints { line: 2 })
+        Verdict::Verified
+    );
+}
+
+/// B12b. A single RAT line, copied verbatim out of that same proof and stood
+/// on its own against the same formula.
+///
+/// It was the only fixture reaching the `RatHints` path in milestone 1. It is
+/// worth keeping for a better reason: its blocks name clauses 46 and 47, which
+/// are lemmas of the proof it came from and do not exist when the line stands
+/// alone. A RAT step is checked against the database it is in, not the one it
+/// was written for — so this is a rejection, not a pass.
+#[test]
+fn b12b_a_rat_line_out_of_context_is_rejected() {
+    let run = common::cli("b12b_rat_hints.cnf", "b12b_rat_hints.lrat");
+    assert_ne!(run.code, 0, "a RAT line out of context exited 0");
+    run.assert("s NOT VERIFIED", 1);
+    assert!(matches!(
+        common::verdict("b12b_rat_hints.cnf", "b12b_rat_hints.lrat"),
+        Verdict::NotVerified(_)
     ));
 }
 
-/// B12b. A single RAT resolvent block, copied verbatim from that same proof.
-/// Without it the `RatHints` path is never reached by any real file.
+/// B17. A real binary proof: 64 bytes of `kissat`'s binary DRAT.
+///
+/// The mistake is forgetting `--no-binary`, and milestone 1 reported it as a
+/// corrupt proof — `expected an integer, found 'a*\x13\x00...'` — which is a
+/// tool failure dressed up as a bad certificate, exactly the confusion this
+/// project exists to remove. It is the one construct left that Refute declines
+/// to check, so it is what keeps the third verdict honest.
 #[test]
-fn b12b_rat_hint_block_is_unsupported_not_verified() {
-    let run = common::cli("b12b_rat_hints.cnf", "b12b_rat_hints.lrat");
-    assert_ne!(run.code, 0, "a RAT block exited 0");
+fn b17_a_binary_proof_is_unsupported_not_verified() {
+    let run = common::cli("b17_binary_proof.cnf", "b17_binary_proof.lrat");
+    assert_ne!(run.code, 0, "a binary proof exited 0");
     run.assert("s UNSUPPORTED", 2);
-    assert!(matches!(
-        common::verdict("b12b_rat_hints.cnf", "b12b_rat_hints.lrat"),
-        Verdict::Unsupported(Unsupported::RatHints { line: 1 })
-    ));
     assert!(
-        run.stderr.contains("drat-trim"),
-        "the message must name the way forward; stderr was {:?}",
-        run.stderr
+        matches!(
+            common::verdict("b17_binary_proof.cnf", "b17_binary_proof.lrat"),
+            Verdict::Unsupported(_)
+        ),
+        "{:?}",
+        common::verdict("b17_binary_proof.cnf", "b17_binary_proof.lrat")
     );
+}
+
+/// B18. A hint list of resolvent block markers, longer than the ceiling.
+///
+/// The ceiling bounds the *whole* hint list — prefix, block markers and block
+/// hints together — because a line of ten million one-hint blocks allocates
+/// exactly as much as a ten-million-hint list does. Milestone 1 discarded the
+/// negative tokens without counting them, so this line was unbounded.
+#[test]
+fn b18_block_markers_count_against_the_hint_ceiling() {
+    let limits = Limits {
+        max_clause_len: 4,
+        ..Limits::default()
+    };
+    let outcome = refute::check_readers(
+        Cursor::new("p cnf 3 3\n1 0\n-1 2 0\n-2 0\n".as_bytes()),
+        Cursor::new("4 1 0 -1 -2 -3 -1 -2 0\n".as_bytes()),
+        &limits,
+    );
+    match outcome.verdict {
+        Verdict::NotVerified(rejection) => match rejection.reason {
+            Reason::Parse(err) => assert_eq!(
+                err.kind,
+                ParseErrorKind::ListTooLong {
+                    limit: limits.max_clause_len
+                }
+            ),
+            other => panic!("expected a parse error, got {other:?}"),
+        },
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+}
+
+/// B19. A RAT lemma whose first literal is written twice: `1 1 3`.
+///
+/// The pivot is the first literal, and assigning a literal twice is
+/// idempotent, so the repeat changes nothing. The formula and the hints are
+/// `resolvent_propagates`'s, whose lemma sequence `drat-trim` verifies.
+#[test]
+fn b19_a_repeated_pivot_is_idempotent() {
+    let formula = std::fs::read_to_string(common::fixture("resolvent_propagates.cnf")).unwrap();
+    let outcome = refute::check_readers(
+        Cursor::new(formula.as_bytes()),
+        Cursor::new("7 1 1 3 0 -1 2 3 4 0\n8 0 5 6 7 1 0\n".as_bytes()),
+        &Limits::default(),
+    );
+    assert_eq!(outcome.verdict, Verdict::Verified);
+}
+
+/// B20. A hint list that opens with a resolvent block: the prefix is empty.
+///
+/// Never observed in real output, which always propagates something before it
+/// resolves, but it is legal and harmless — the block simply starts from the
+/// negated lemma alone. Strictness here would forbid a shape no measurement
+/// condemns. `resolvent_propagates` is already this shape, and the first
+/// assertion is on its bytes so that a regenerated fixture cannot quietly stop
+/// being the test.
+#[test]
+fn b20_a_rat_line_may_have_an_empty_prefix() {
+    let proof = std::fs::read_to_string(common::fixture("resolvent_propagates.lrat")).unwrap();
+    let rat_line = proof
+        .lines()
+        .find(|line| line.split_whitespace().any(|t| t.starts_with('-')))
+        .expect("the fixture should carry a resolvent block");
+    let first_hint = rat_line
+        .split_whitespace()
+        .skip_while(|t| *t != "0")
+        .nth(1)
+        .expect("the fixture's RAT line should have a hint list");
+    assert!(
+        first_hint.starts_with('-'),
+        "the prefix is not empty: {rat_line:?}"
+    );
+    assert_eq!(
+        common::verdict("resolvent_propagates.cnf", "resolvent_propagates.lrat"),
+        Verdict::Verified
+    );
+}
+
+/// B21. A resolvent block naming clause id 0.
+///
+/// It cannot be written. `-0` scans as zero, not as a negative, so it is read
+/// as a hint identifier and rejected there — which is the fail-closed answer
+/// and the one milestone 1 already gave. `docs/TDD.md` part 2 asks for
+/// `NotAResolutionCandidate` in one row and for a parse error in another; the
+/// parse error is what the grammar actually produces, and asserting the other
+/// would be asserting something untrue.
+#[test]
+fn b21_a_block_cannot_name_clause_zero() {
+    let err = parse_error("p cnf 2 2\n1 0\n-1 0\n", "3 1 0 -0 0\n");
+    assert_eq!(err.source, Source::Proof);
+    assert_eq!(
+        err.kind,
+        ParseErrorKind::NonPositiveClauseId("-0".to_owned())
+    );
+    assert_eq!(err.line, 1);
 }
 
 /// B13. 100,000 variables, 50,000 steps, generated here rather than committed.

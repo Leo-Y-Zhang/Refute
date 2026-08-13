@@ -1,4 +1,4 @@
-//! P1–P5: proofs that must verify.
+//! P1–P11: proofs that must verify.
 //!
 //! These are the vacuous half of the suite while `check()` is a stub. They earn
 //! their place once the checker exists, as the control against over-strictness:
@@ -130,4 +130,49 @@ fn p8_repeated_literal_in_a_lemma_verifies() {
         &Limits::default(),
     );
     assert_eq!(outcome.verdict, Verdict::Verified);
+}
+
+/// P9. The flip milestone 1b exists for.
+///
+/// `real_rat_proof` is pigeonhole 5 into 4, straight out of `kissat` and
+/// `drat-trim -L`: 80 additions, 12 carrying resolvent blocks, 8 with no hints
+/// at all. Milestone 1 stopped on proof line 2 of it and printed
+/// `s UNSUPPORTED`, which is what every real proof got.
+#[test]
+fn p9_real_rat_proof_verifies() {
+    assert_eq!(
+        common::verdict("real_rat_proof.cnf", "real_rat_proof.lrat"),
+        Verdict::Verified
+    );
+    common::cli("real_rat_proof.cnf", "real_rat_proof.lrat").assert("s VERIFIED", 0);
+}
+
+/// P10. The same construct at scale: pigeonhole 7 into 6. 624 additions, 42
+/// RAT lines, 30 empty hint lists, 108 resolvent blocks, 353 deletions.
+///
+/// Here for the reason `random_unsat` is here. A checker that is subtly
+/// over-strict about RAT passes 5x4 — 24 blocks over 20 candidate scans is not
+/// enough proof to hang a verdict on.
+#[test]
+fn p10_rat_pigeonhole_verifies() {
+    assert_eq!(
+        common::verdict("rat_pigeonhole.cnf", "rat_pigeonhole.lrat"),
+        Verdict::Verified
+    );
+    common::cli("rat_pigeonhole.cnf", "rat_pigeonhole.lrat").assert("s VERIFIED", 0);
+}
+
+/// P11. The one proof whose resolvent block has to propagate.
+///
+/// Every one of the 703 blocks measured for `docs/TDD.md` part 2 is refuted by
+/// the negation of its own resolvent and carries no hints, so the hint walk
+/// inside a block has no coverage from any real file. This fixture is built so
+/// that it does: three hints, with the conflict on the last.
+#[test]
+fn p11_resolvent_block_hints_propagate() {
+    assert_eq!(
+        common::verdict("resolvent_propagates.cnf", "resolvent_propagates.lrat"),
+        Verdict::Verified
+    );
+    common::cli("resolvent_propagates.cnf", "resolvent_propagates.lrat").assert("s VERIFIED", 0);
 }

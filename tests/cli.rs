@@ -146,6 +146,7 @@ fn output_is_plain_ascii_in_every_verdict() {
         ("n05_no_empty_clause.cnf", "n05_no_empty_clause.lrat"),
         ("real_rat_proof.cnf", "real_rat_proof.lrat"),
         ("b06_var_over_limit.cnf", "b06_var_over_limit.lrat"),
+        ("b17_binary_proof.cnf", "b17_binary_proof.lrat"),
         ("hostile_escape_formula.cnf", "hostile_escape_formula.lrat"),
         ("hostile_escape_proof.cnf", "hostile_escape_proof.lrat"),
     ];
@@ -181,7 +182,39 @@ fn an_unreadable_token_is_quoted_with_its_bytes_escaped() {
 fn the_three_verdicts_and_their_exit_codes() {
     common::cli("tiny_unsat.cnf", "tiny_unsat.lrat").assert("s VERIFIED", 0);
     common::cli("n05_no_empty_clause.cnf", "n05_no_empty_clause.lrat").assert("s NOT VERIFIED", 1);
-    common::cli("real_rat_proof.cnf", "real_rat_proof.lrat").assert("s UNSUPPORTED", 2);
+    // The third verdict's only remaining producer. It was `real_rat_proof`
+    // until milestone 1b, which is the whole point: that file now verifies.
+    common::cli("b17_binary_proof.cnf", "b17_binary_proof.lrat").assert("s UNSUPPORTED", 2);
+}
+
+/// `UNSUPPORTED` names the command that fixes it, not the milestone that
+/// would have. A reader who is told their proof is unsupported and nothing
+/// else concludes the file is fine and stops.
+#[test]
+fn a_binary_proof_is_told_how_to_produce_a_text_one() {
+    let run = common::cli("b17_binary_proof.cnf", "b17_binary_proof.lrat");
+    run.assert("s UNSUPPORTED", 2);
+    assert!(
+        run.stderr.contains("--no-binary"),
+        "the message must name the fix; stderr was {:?}",
+        run.stderr
+    );
+}
+
+/// A RAT rejection carries the resolvent block it died on, because that is the
+/// number a person needs in order to find the line — the step id and the proof
+/// line get them to a hint list of forty tokens, and no further.
+#[test]
+fn a_rat_rejection_names_the_resolvent_block() {
+    let run = common::cli("r02_block_dropped.cnf", "r02_block_dropped.lrat");
+    run.assert("s NOT VERIFIED", 1);
+    assert!(
+        run.stderr.contains("resolvent block"),
+        "stderr was {:?}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("step"), "stderr was {:?}", run.stderr);
+    assert!(run.stderr.contains("line"), "stderr was {:?}", run.stderr);
 }
 
 /// A rejection names the step, the line and the reason, or it is not

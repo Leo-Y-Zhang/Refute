@@ -1,4 +1,9 @@
-//! N1–N12: the twelve corruption controls.
+//! N1–N12 and R1–R8: the corruption controls.
+//!
+//! The R series is milestone 1b's, one per new rejection rule. Each was run
+//! against the milestone-1 build first, where it reported `s UNSUPPORTED` for
+//! a construct that now has to be rejected outright, and each was observed
+//! failing there before its rule existed.
 //!
 //! The gate for milestone 1 is that every one of these produces a non-zero exit
 //! and never the string `s VERIFIED`. Each was written and run against a
@@ -25,7 +30,7 @@
 
 mod common;
 
-use refute::{Reason, Unsupported, Verdict};
+use refute::{Reason, Verdict};
 
 fn rejection_reason(cnf: &str, proof: &str) -> Reason {
     match common::verdict(cnf, proof) {
@@ -200,18 +205,125 @@ fn n11_non_monotonic_ids() {
     ));
 }
 
-/// N12. A proof that is a bare empty clause with no hints.
+/// N12, now R8's first half. A proof that is a bare empty clause with no hints.
 ///
-/// The single line that forced a three-way verdict. Treating "no hints" as
-/// acceptance accepts this, which is a checker that accepts anything. It must
-/// be unsupported, exit 2, and — asserted explicitly — never exit 0.
+/// The single line that forced a three-way verdict in milestone 1, where it
+/// was `Unsupported(EmptyHints)` and exit 2. An empty hint list is now checked
+/// rather than declined, and this one cannot be: an empty lemma has no first
+/// literal, so it has no pivot, so the RAT predicate cannot be evaluated at
+/// all. Fail closed — a rejection, exit 1, and never exit 0.
 #[test]
-fn n12_bare_empty_clause_is_unsupported_not_verified() {
+fn n12_bare_empty_clause_is_rejected() {
     let run = common::cli("n12_bare_empty_clause.cnf", "n12_bare_empty_clause.lrat");
     assert_ne!(run.code, 0, "a bare empty clause exited 0");
-    run.assert("s UNSUPPORTED", 2);
+    run.assert("s NOT VERIFIED", 1);
     assert!(matches!(
         common::verdict("n12_bare_empty_clause.cnf", "n12_bare_empty_clause.lrat"),
-        Verdict::Unsupported(Unsupported::EmptyHints { .. })
+        Verdict::NotVerified(_)
     ));
+}
+
+/// Asserts a rejection, without naming the rule. The safety property on its
+/// own: not verified, not unsupported, not a pass.
+fn assert_rejected(cnf: &str, proof: &str) {
+    assert_refused(cnf, proof);
+    let verdict = common::verdict(cnf, proof);
+    assert!(
+        matches!(verdict, Verdict::NotVerified(_)),
+        "expected a rejection for {proof}, got {verdict:?}"
+    );
+}
+
+/// R1. The wrong pivot: the first two literals of a RAT lemma swapped.
+///
+/// The pivot is the lemma's first literal *as written in the file*, and
+/// `normalize` sorts on the way into the database — so a checker reading the
+/// pivot after normalisation scans for the wrong literal and rejects the
+/// smallest real RAT proof there is. This is the mutation that says which of
+/// the two it did.
+#[test]
+fn r1_wrong_pivot() {
+    assert_rejected("r01_wrong_pivot.cnf", "r01_wrong_pivot.lrat");
+}
+
+/// R2. The last resolvent block, and its hints, deleted.
+///
+/// The load-bearing control of this milestone. Every resolvent block in every
+/// real proof is refuted by the negation of its own resolvent, so a checker
+/// that skipped candidates whose resolvent is trivially refuted would accept
+/// the deletion of *any* real block, and this mutation would be undetectable.
+#[test]
+fn r2_resolvent_block_dropped() {
+    assert_rejected("r02_block_dropped.cnf", "r02_block_dropped.lrat");
+}
+
+/// R3. A resolvent block redirected to a clause deleted earlier in the proof.
+///
+/// Sound to skip — a step checked against a smaller formula still refutes the
+/// larger one — but a producer naming a clause that is not there is not
+/// producing this proof.
+#[test]
+fn r3_block_names_a_deleted_clause() {
+    assert_rejected(
+        "r03_block_names_deleted_clause.cnf",
+        "r03_block_names_deleted_clause.lrat",
+    );
+}
+
+/// R4. A resolvent block's last hint redirected, on the one fixture whose
+/// block hints are ever walked.
+#[test]
+fn r4_block_hint_redirected() {
+    assert_rejected(
+        "r04_block_hint_redirected.cnf",
+        "r04_block_hint_redirected.lrat",
+    );
+}
+
+/// R4b. The same block's conflict hint dropped, so its walk runs out.
+#[test]
+fn r4b_block_conflict_hint_dropped() {
+    assert_rejected(
+        "r04b_block_conflict_hint_dropped.cnf",
+        "r04b_block_conflict_hint_dropped.lrat",
+    );
+}
+
+/// R5. An empty-hint lemma reordered so that its pivot does have resolution
+/// candidates.
+///
+/// The one to read first. An empty hint list is a claim — "this pivot has no
+/// resolution candidate" — and a checker that takes it at face value passes
+/// every other test in this suite while accepting any clause in the world.
+/// The candidate set is computed by the checker from its own database, so the
+/// claim is checked rather than believed.
+#[test]
+fn r5_empty_hints_with_candidates() {
+    assert_rejected(
+        "r05_empty_hints_with_candidates.cnf",
+        "r05_empty_hints_with_candidates.lrat",
+    );
+}
+
+/// R6. An extra resolvent block naming a live clause that is not a candidate.
+#[test]
+fn r6_extra_block() {
+    assert_rejected("r06_extra_block.cnf", "r06_extra_block.lrat");
+}
+
+/// R7. A hint appended to a block whose resolvent its own negation already
+/// refutes, so the hint can never be reached. Padding, and real output never
+/// does it — the same argument as `EarlyConflict` in milestone 1.
+#[test]
+fn r7_padded_block() {
+    assert_rejected("r07_padded_block.cnf", "r07_padded_block.lrat");
+}
+
+/// R8. An empty lemma with a RAT-shaped hint list, `46 0 -1 0`.
+///
+/// The other half is `n12_bare_empty_clause` above. Both are the same rule:
+/// no literals means no pivot means no predicate to evaluate.
+#[test]
+fn r8_rat_without_pivot() {
+    assert_rejected("r08_rat_without_pivot.cnf", "r08_rat_without_pivot.lrat");
 }
