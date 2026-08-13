@@ -2,16 +2,18 @@
 
 **State:** milestone 1 is on `main` (4b6bb9e). Milestone 1b is **designed on
 `design/milestone-1b` (d7532c6) and built on `feat/milestone-1b`**, which
-branches from it. The suite is 74 tests, green on stable 1.97.1 and on 1.74.0,
-in both profiles; `clippy --all-targets -D warnings` and `cargo fmt --check` are
-clean. Nothing is pushed and nothing is merged.
+branches from it. The suite is 79 tests, green on stable 1.97.1 and on 1.74.0;
+`clippy --all-targets -D warnings` and `cargo fmt --check` are clean. The
+branch is pushed. Nothing is merged, and `main` has not been touched.
 
 ## Exact next step
 
-**Ask the owner the two questions below, then push the branch and open a PR.**
-Neither question blocks the code — 1b is complete and green without them — but
-question 1 decides whether one more fixture is committed before review, and
-committing it is the answer that cannot be taken back.
+**The owner's decision: merge `feat/milestone-1b` into `main`, or send it
+back.** Everything below it is done — the release blockers are closed, CI has
+run on the real code, and the two questions that were open are still open and
+still not blockers.
+
+Answer them at merge time, not before:
 
 ## The two questions
 
@@ -29,12 +31,51 @@ committing it is the answer that cannot be taken back.
    reasoning. It is the one new rule with a plausible false-rejection risk
    against a producer other than `drat-trim`, it never fires on any real file
    measured, and it has its own reason code (`RatLemmaIsRup`) so relaxing it is
-   one branch.
+   one branch. It now has a test —
+   `r11_rat_lemma_that_is_already_rup` — whose comment says in as many words
+   that relaxing the rule accepts a good proof rather than a bad one, so
+   answering "acceptance" means deleting that test and the reason code
+   together, deliberately.
+
+## What the closing session added
+
+Five release blockers, found by the tester and the release-manager
+independently. In every one of them the code was right and the tests were the
+hole: one line either way and this checker printed `s VERIFIED` on a formula
+`kissat` reports satisfiable, with a fully green suite.
+
+- **R9, R10, R11** — three rejection rules with no fixture. R9 and R10 are
+  false-accept holes; R11 is a strictness rule with no coverage at all, which
+  is what got `Reason::DuplicateId` deleted in milestone 1. Hand-built in
+  `tools/mutate.py`, because no real proof carries the shape; `kissat` is run
+  on each formula during generation, so the satisfiability claims are its.
+- **P12 and the trail balance.** `assignments == assignments_undone` is now
+  asserted on every positive fixture, not just on B13, whose proof is pure RUP.
+  It caught nothing on its own: `check_rat`'s tautology exit is reachable only
+  by a tautological lemma with an empty hint list, and no fixture had one.
+  Deleting its `unwind` left all 77 tests green. P12 is that fixture.
+- **B22 and `Limits::max_line_bytes`.** `src/lrat.rs` claimed a 200 MB proof
+  was read in constant memory. Measured: 268.6 MB of working set on a 200 MB
+  single-line proof, because a line is buffered before any ceiling applies to
+  what is in it. Now bounded, and the same file measures 28.6 MB.
+- **The README's discipline claim, narrowed.** It said every corruption
+  control was written before the rule that catches it and observed failing
+  there. True of N1–N12 and R1–R8; false of everything added after the red
+  commit `73c970b`. The paragraph now says which is which, and R9–R11 are
+  labelled as what they are — justified by a recorded mutation kill, which is
+  the weaker evidence.
+- **The README's van der Waerden rows.** They cannot be reproduced from this
+  repository alone; they need `tools/differential.sh --extra` pointing at
+  another of the author's repositories. Stated next to them.
+
+Every test added in this session was written after the code it covers. None of
+them claims part 1's discipline. Each one's commit message carries the mutation
+it was observed failing against, with the real output.
 
 ## What was built
 
 Build order steps 2 to 11 of `docs/TDD.md` part 2, in that order, one commit
-each. Step 12 — push and CI — is not done.
+each.
 
 - **Fixtures first** (c850d45): `rat_pigeonhole` (pigeonhole 7x6, 55,003 bytes),
   `resolvent_propagates`, `b17_binary_proof`, and `r01`–`r08`. The corpus is
@@ -47,12 +88,14 @@ each. Step 12 — push and CI — is not done.
 
 ## Verified on this machine
 
-- `cargo test --no-fail-fast` — 74 passed, 0 failed, on stable 1.97.1
-- the same on **1.74.0** — 74 passed, so `rust-version` stays measured
-- the same with `--release` — 74 passed
+- `cargo test --no-fail-fast` — 79 passed, 0 failed, on stable 1.97.1
+- the same on **1.74.0** — 79 passed, so `rust-version` stays measured
 - `cargo clippy --all-targets -- -D warnings` — clean
 - `cargo fmt --all --check` — clean
-- **`tools/differential.sh`**, the gate the TDD makes the README conditional on:
+- **`tools/differential.sh`**, the gate the TDD makes the README conditional on.
+  Re-run after the closing session's changes; the first eight rows are from
+  that re-run, and the two van der Waerden rows are from the build session and
+  need `--extra`, so they were not re-run here:
 
 | instance | LRAT | `drat-trim` | `refute` | agree |
 |---|---:|---|---|---|
@@ -78,7 +121,13 @@ each. Step 12 — push and CI — is not done.
       s VERIFIED
 
   20,069 clauses examined is the number the design's occurrence-tracking table
-  predicted for the scan it chose over an index, to the unit.
+  predicted for the scan it chose over an index, to the unit. Re-measured in
+  the closing session, on the regenerated 8x7 proof: identical, including
+  81,606 assignments and 81,606 of them undone.
+
+- **Peak working set on a 200 MB proof written as a single line**, release
+  binary, polled every 5 ms: 268.6 MB before `max_line_bytes`, 28.6 MB after.
+  That is the measurement `src/lrat.rs`'s opening paragraph now rests on.
 
 ## What the build proved that the design could only argue
 
@@ -93,6 +142,14 @@ c44bca4's message with their real output.
    every R fixture is *still* rejected — by a different rule. The bare "is it
    rejected" assertions do not notice; the exact-reason assertions do. That is
    why the R series names its rule, step, line and resolvent block.
+
+The closing session added four more, each in the commit that added the test.
+Two of them print `s VERIFIED` on a satisfiable formula — `unwind(base)` taken
+out from between the resolvent blocks, and a repeated literal read as a
+tautology — and in both cases R9 or R10 was the *only* failure in the suite.
+The third relaxes `RatLemmaIsRup` and correctly verifies a valid proof, which
+is why R11's own comment says it is a tripwire and not a control. The fourth
+removes `check_rat`'s tautology `unwind` and is caught by P12 alone.
 
 ## Deviations from the written build order, and why
 
@@ -122,10 +179,14 @@ c44bca4's message with their real output.
 
 ## Not verified
 
-- **CI.** The branch is not pushed, so no run exists. Build order step 12.
 - **The 200 MB rung.** Largest artefact checked end to end is 386 KB, and the
-  largest verified anywhere in this session is the 257 KB vdW rung. Milestone 3
+  largest verified anywhere is the 257 KB vdW rung. The 200 MB file measured
+  for `max_line_bytes` is a synthetic single line, not a proof. Milestone 3
   owns scale.
+- **The two van der Waerden differential rows.** They stand from the build
+  session and were not re-run in the closing one, because their formulas come
+  from another repository via `--extra`. The eight rows that reproduce here
+  were re-run and still agree.
 - **Any producer of LRAT other than `drat-trim`.** Two of the new rules are
   strict on shapes only `drat-trim`'s behaviour has been measured against; that
   is question 2.
@@ -142,6 +203,27 @@ Never named by path in a tracked file. `tools/gen_fixtures.sh` and
 neither. `tools/differential.sh --extra <dir>` takes pre-built CNFs, which is
 how a certificate from another repository is checked without this one depending
 on it.
+
+## Verified in CI (milestone 1b)
+
+Run 31747764407 on `96bed67`, the first CI run on the milestone-1b code —
+every green run before it was on a docs-only commit. All five jobs:
+
+| Job | Result |
+|---|---|
+| `lint` — fmt and clippy on the pinned 1.97.1 | success |
+| `test (ubuntu-latest, stable)` | success, 79 tests |
+| `test (ubuntu-latest, 1.74.0)` | success, 79 tests |
+| `test (windows-latest, stable)` | success, 79 tests |
+| `test (windows-latest, 1.74.0)` | success, 79 tests |
+
+The logs were read rather than the ticks. Each MSRV leg installed and reported
+`rustc 1.74.0 (79e9716c9 2023-11-13)`; every test leg reported 26 + 12 + 24 +
+13 + 4, which is the same split as the local runs; the CRLF fixture guard ran
+on both Windows legs, which is the platform that would quietly rewrite it.
+
+`main` was not touched and nothing was merged. The branch is
+`feat/milestone-1b` at `96bed67`, pushed, tracking `origin`.
 
 ---
 
