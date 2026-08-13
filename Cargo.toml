@@ -1,0 +1,14 @@
+[package]
+name = "refute"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "An independent forward checker for LRAT unsatisfiability proofs"
+readme = "README.md"
+keywords = ["sat", "drat", "lrat", "proof", "unsat"]
+categories = ["command-line-utilities", "science"]
+
+# No dependencies, deliberately: see docs/PRD.md, "Not doing / rejected
+# alternatives". Every dependency is a WASM-size and audit cost at milestone 4.
+[dependencies]
