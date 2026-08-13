@@ -302,36 +302,39 @@ impl Checker {
         Verdict::Verified
     }
 
-    /// The step check, exactly as specified in `docs/TDD.md`.
-    fn check_rup(&mut self, lits: &[Lit], hints: &[ClauseId]) -> Result<(), Reason> {
-        let mark = self.trail.len();
-
+    /// Puts the negation of a lemma on the trail.
+    ///
+    /// Returns `true` when the lemma is a tautology, which the caller accepts:
+    /// adding `x or not-x` preserves satisfiability and it can never be the
+    /// empty clause. This is the one permissive rule on an addition, and
+    /// rejecting instead would be a false rejection with no safety benefit.
+    fn assume_negated(&mut self, lits: &[Lit]) -> bool {
         for lit in lits {
             match self.value(*lit) {
-                // The complement is already assigned true, so this lemma is a
-                // tautology. Adding one preserves satisfiability and it can
-                // never be the empty clause, so accepting is sound. This is the
-                // one permissive rule on an addition; rejecting would be a
-                // false rejection with no safety benefit.
-                VAR_TRUE => {
-                    self.unwind(mark);
-                    return Ok(());
-                }
+                VAR_TRUE => return true,
                 // A repeated literal. Assigning it again is idempotent.
                 VAR_FALSE => {}
                 _ => self.assign_true(lit.negate()),
             }
         }
+        false
+    }
 
+    /// Milestone 1's hint walk, with the unwinding taken out of it.
+    ///
+    /// `Ok(Some(hint))` means that hint was falsified and nothing before it
+    /// was; `Ok(None)` means the list ran out with no conflict; `Err` is one of
+    /// the four hint rejections. The caller owns the trail mark, because a RAT
+    /// step walks its prefix and then keeps those propagations: every resolvent
+    /// block is checked from the negated lemma *plus* the prefix, and without
+    /// them 100 % of the RAT lines measured for `docs/TDD.md` part 2 fail.
+    fn walk(&mut self, hints: &[ClauseId]) -> Result<Option<ClauseId>, Reason> {
         let last = hints.len().saturating_sub(1);
         for (position, hint) in hints.iter().enumerate() {
             self.stats.hints_resolved = self.stats.hints_resolved.saturating_add(1);
             let clause = match self.db.get(hint) {
                 Some(clause) => clause.clone(),
-                None => {
-                    self.unwind(mark);
-                    return Err(Reason::MissingHint(*hint));
-                }
+                None => return Err(Reason::MissingHint(*hint)),
             };
 
             let mut satisfied = false;
@@ -357,14 +360,12 @@ impl Checker {
                 // In a well-formed derivation no hint is satisfied where it is
                 // used. This is the rule that catches a valid proof of a
                 // different formula.
-                self.unwind(mark);
                 return Err(Reason::HintSatisfied(*hint));
             }
             match (free_count, free) {
                 (0, _) => {
-                    self.unwind(mark);
                     return if position == last {
-                        Ok(())
+                        Ok(Some(*hint))
                     } else {
                         // Sound to accept, but a conflict before the last hint
                         // means the list was reordered or padded, and real
@@ -373,15 +374,27 @@ impl Checker {
                     };
                 }
                 (1, Some(lit)) => self.assign_true(lit),
-                _ => {
-                    self.unwind(mark);
-                    return Err(Reason::HintNotUnit(*hint));
-                }
+                _ => return Err(Reason::HintNotUnit(*hint)),
             }
         }
 
+        Ok(None)
+    }
+
+    /// The step check, exactly as specified in `docs/TDD.md`.
+    fn check_rup(&mut self, lits: &[Lit], hints: &[ClauseId]) -> Result<(), Reason> {
+        let mark = self.trail.len();
+        if self.assume_negated(lits) {
+            self.unwind(mark);
+            return Ok(());
+        }
+        let walked = self.walk(hints);
         self.unwind(mark);
-        Err(Reason::NoConflict)
+        match walked {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(Reason::NoConflict),
+            Err(reason) => Err(reason),
+        }
     }
 
     fn value(&self, lit: Lit) -> u8 {
