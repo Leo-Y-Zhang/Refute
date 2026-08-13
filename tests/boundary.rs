@@ -10,12 +10,30 @@ use std::io::Cursor;
 use std::time::Instant;
 
 use refute::cnf::Warning;
-use refute::{Limits, ParseErrorKind, Reason, Unsupported, Verdict};
+use refute::{Limits, ParseError, ParseErrorKind, Reason, Source, Unsupported, Verdict};
 
 fn parse_error_kind(cnf: &str, proof: &str) -> ParseErrorKind {
     match common::verdict(cnf, proof) {
         Verdict::NotVerified(rejection) => match rejection.reason {
             Reason::Parse(err) => err.kind,
+            other => panic!("expected a parse error, got {other:?}"),
+        },
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+}
+
+/// The same, on text held here rather than in a fixture. A fixture earns its
+/// place by carrying provenance — a solver ran, and these bytes came out. Two
+/// lines of malformed DIMACS have none to carry.
+fn parse_error(cnf: &str, proof: &str) -> ParseError {
+    let outcome = refute::check_readers(
+        Cursor::new(cnf.as_bytes()),
+        Cursor::new(proof.as_bytes()),
+        &Limits::default(),
+    );
+    match outcome.verdict {
+        Verdict::NotVerified(rejection) => match rejection.reason {
+            Reason::Parse(err) => err,
             other => panic!("expected a parse error, got {other:?}"),
         },
         other => panic!("expected a rejection, got {other:?}"),
@@ -152,6 +170,23 @@ fn b9_missing_terminator() {
         .assert("s NOT VERIFIED", 1);
 }
 
+/// B9b. The *formula* ending in the middle of a clause, which B9 covers only
+/// for the proof.
+///
+/// The parser already failed closed here; nothing asserted it, so deleting the
+/// check that does it broke no test. A formula whose last clause has no
+/// terminator is a truncated download, and half a clause is not a formula.
+#[test]
+fn b9b_formula_ending_mid_clause_is_rejected() {
+    let err = parse_error("p cnf 2 2\n1 2 0\n1 2", "");
+    assert_eq!(err.source, Source::Formula);
+    assert_eq!(err.kind, ParseErrorKind::UnexpectedEof);
+    assert_eq!(
+        err.line, 3,
+        "the error names the line the unterminated clause began on"
+    );
+}
+
 /// B10. A deletion of an id never added. Accepted deliberately: deletion only
 /// removes tools from the checker, so a spurious one can cause a later
 /// `MissingHint` but can never cause a false `VERIFIED`. Being strict here
@@ -171,6 +206,21 @@ fn b11_double_deletion_is_accepted() {
         common::verdict("b11_double_deletion.cnf", "b11_double_deletion.lrat"),
         Verdict::Verified
     );
+}
+
+/// B11b. Tokens after the `0` that ends a deletion line.
+///
+/// An addition has always rejected them. A deletion accepted anything after
+/// its terminator, so `9 d 1 0 2` silently kept clause 2 alive — the parser
+/// disagreeing with itself about what a step is. Deletion is permissive about
+/// *which* identifiers it is given, deliberately and soundly; that is not a
+/// reason to be permissive about the shape of the line carrying them.
+#[test]
+fn b11b_tokens_after_a_deletion_terminator_are_rejected() {
+    let err = parse_error("p cnf 2 2\n1 0\n-1 0\n", "3 d 1 0 2\n");
+    assert_eq!(err.source, Source::Proof);
+    assert_eq!(err.kind, ParseErrorKind::TrailingTokens("2".to_owned()));
+    assert_eq!(err.line, 1);
 }
 
 /// B12. A whole real `drat-trim` proof containing RAT blocks.

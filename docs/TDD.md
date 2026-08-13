@@ -169,6 +169,11 @@ false `VERIFIED`. Being strict here would risk false rejections against other LR
 producers for no safety gain. Measured: `drat-trim` emits zero unknown deletions
 and deletes 203 of 204 original clauses over the run.
 
+The permissiveness is about *which* identifiers a deletion names, not about the
+shape of the line naming them. Tokens after the `0` that ends a deletion are a
+parse error, exactly as they are on an addition: a parser that disagrees with
+itself about where a step ends is reading a file nobody wrote.
+
 Refute deliberately does **not** copy `drat-trim`'s rule of ignoring deletions of
 unit clauses. That rule exists to protect backward checking. Forward with hints
 needs no such exception: if a later step needs a deleted unit, its hint lookup

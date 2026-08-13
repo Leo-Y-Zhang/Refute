@@ -127,7 +127,7 @@ fn parse_step(line: &str, line_no: u64, limits: &Limits) -> Result<Step, ParseEr
     if lookahead.next() == Some("d") {
         let mut ids = Vec::new();
         let mut terminated = false;
-        for token in lookahead {
+        for token in lookahead.by_ref() {
             if token == "0" {
                 terminated = true;
                 break;
@@ -136,6 +136,14 @@ fn parse_step(line: &str, line_no: u64, limits: &Limits) -> Result<Step, ParseEr
         }
         if !terminated {
             return Err(ParseErrorKind::MissingTerminator);
+        }
+        // Deletion is permissive about *which* identifiers it is handed, which
+        // is sound because deleting only removes tools from the checker. The
+        // shape of the line is a different question: an addition has always
+        // rejected tokens after its terminator, and a parser that disagrees
+        // with itself about where a step ends is reading a file nobody wrote.
+        if let Some(extra) = lookahead.next() {
+            return Err(ParseErrorKind::TrailingTokens(extra.to_owned()));
         }
         return Ok(Step::Delete { ids, line: line_no });
     }
