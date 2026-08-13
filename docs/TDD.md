@@ -303,7 +303,7 @@ Each is a deterministic mutation of P1 or a larger real proof, produced by
 | B11 | Deletion of the same id twice | Accepted, counted |
 | B12 | A real `drat-trim` proof containing RAT lines | `Unsupported`, exit 2, and asserted **not** exit 0. **Corrected during the build:** this cannot report `RatHints`. In every instance measured — pigeonhole 5x4, 6x5, 7x6, 8x7 — the first unsupported construct is an *empty hint list*, on line 2, every time, because the RAT blocks resolve against exactly those lemmas. B12 asserts `EmptyHints { line: 2 }` |
 | B12b | A single RAT resolvent block, copied verbatim out of that same proof | `Unsupported(RatHints)`, exit 2, not exit 0. Added because otherwise the `RatHints` path is never reached by any real file |
-| B13 | 100k-variable formula, 50k-step proof | Completes; asserts the trail unwind is not O(vars) per step (time bound in the test) |
+| B13 | 100k-variable formula, 50k-step proof | Completes; asserts the trail unwind is not O(vars) per step. **Corrected after the build:** the time bound written here was decoration. With the unwind replaced by a clear of the whole assignment vector the same test ran in 14.9 s debug and 0.10 s release, both inside its 20 s bound, so the assertion passed with the exact defect it was written to catch. It now asserts `Stats.assignments_undone == Stats.assignments` and a ceiling on `assignments` — exact, and identical in both profiles |
 
 ### CLI-level
 

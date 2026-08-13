@@ -106,12 +106,15 @@ fn run() -> u8 {
         let counters = outcome.stats;
         eprintln!(
             "refute: {} additions, {} deletions, {} hints resolved, \
-             {} peak live clauses, {} unknown deletions",
+             {} peak live clauses, {} unknown deletions, \
+             {} assignments, {} of them undone",
             counters.additions,
             counters.deletions,
             counters.hints_resolved,
             counters.peak_live_clauses,
-            counters.unknown_deletions
+            counters.unknown_deletions,
+            counters.assignments,
+            counters.assignments_undone
         );
     }
 

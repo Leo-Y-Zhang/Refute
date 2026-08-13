@@ -36,6 +36,18 @@ pub struct Stats {
     /// Deletions naming an identifier that was not present. Counted, not
     /// rejected: see the note on `Delete` handling below.
     pub unknown_deletions: u64,
+    /// Literals assigned over the whole run, one per push onto the trail.
+    pub assignments: u64,
+    /// Assignments undone while unwinding the trail.
+    ///
+    /// Equal to `assignments` at the end of every completed run, because the
+    /// trail is emptied after each step. The pair is what makes "the unwind is
+    /// O(assigned) and not O(vars)" a measurement rather than a claim: an
+    /// unwind that cleared the whole assignment vector would undo far more
+    /// than was ever assigned, or — clearing without counting — nothing at
+    /// all. `b13_large_formula_unwinds_in_proportion_to_assignments` asserts
+    /// both directions.
+    pub assignments_undone: u64,
 }
 
 /// Everything one run produces.
@@ -380,12 +392,15 @@ impl Checker {
                 VAR_TRUE
             };
             self.trail.push(var);
+            self.stats.assignments = self.stats.assignments.saturating_add(1);
         }
     }
 
     /// Unwound in O(assigned), never by clearing the whole vector. Clearing is
     /// O(vars) per step, which is quadratic on a 100,000-variable formula; B13
-    /// in the test suite is the tripwire.
+    /// in the test suite is the tripwire, and it counts the writes rather than
+    /// timing them, because a release build is fast enough to hide the
+    /// difference on the sizes a test can afford.
     fn unwind(&mut self, mark: usize) {
         while self.trail.len() > mark {
             match self.trail.pop() {
@@ -393,6 +408,8 @@ impl Checker {
                     let index = usize::try_from(var).unwrap_or(usize::MAX);
                     if let Some(slot) = self.assign.get_mut(index) {
                         *slot = UNSET;
+                        self.stats.assignments_undone =
+                            self.stats.assignments_undone.saturating_add(1);
                     }
                 }
                 None => break,

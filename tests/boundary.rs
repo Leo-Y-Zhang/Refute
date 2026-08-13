@@ -19,7 +19,6 @@
 mod common;
 
 use std::io::Cursor;
-use std::time::Instant;
 
 use refute::cnf::Warning;
 use refute::{Limits, ParseError, ParseErrorKind, Reason, Source, Unsupported, Verdict};
@@ -273,12 +272,19 @@ fn b12b_rat_hint_block_is_unsupported_not_verified() {
 
 /// B13. 100,000 variables, 50,000 steps, generated here rather than committed.
 ///
-/// The assertion is a time bound, and the thing it catches is a trail unwound
-/// by clearing the assignment vector. That is O(vars) per step: five billion
-/// byte writes for this input, minutes rather than seconds, while the specified
-/// O(assigned) unwind touches about two entries per step.
+/// The thing it catches is a trail unwound by clearing the assignment vector:
+/// O(vars) per step, five billion byte writes for this input, where the
+/// specified O(assigned) unwind touches about two entries per step.
+///
+/// **Corrected after the build.** The assertion used to be a wall clock —
+/// under 20 seconds — which the defect it describes passes comfortably in a
+/// release build and fails only in a debug one. A test whose verdict depends
+/// on the profile is not a test. The counters are exact, identical in both
+/// profiles, and say the two things that matter: every assignment was undone
+/// one at a time, and the total work is proportional to the assignments rather
+/// than to the variables.
 #[test]
-fn b13_large_formula_unwinds_in_time() {
+fn b13_large_formula_unwinds_in_proportion_to_assignments() {
     const CHAIN: u32 = 50_000;
     const UNUSED_VAR: u32 = 100_000;
 
@@ -306,17 +312,26 @@ fn b13_large_formula_unwinds_in_time() {
         CHAIN + 1
     ));
 
-    let started = Instant::now();
     let outcome = refute::check_readers(
         Cursor::new(formula.as_bytes()),
         Cursor::new(proof.as_bytes()),
         &Limits::default(),
     );
-    let elapsed = started.elapsed();
 
     assert_eq!(outcome.verdict, Verdict::Verified);
+    // Every assignment undone exactly once. An unwind that cleared the
+    // assignment vector would undo far more than it ever assigned, or, if it
+    // cleared without counting, nothing at all: either way, not this.
+    assert_eq!(
+        outcome.stats.assignments_undone, outcome.stats.assignments,
+        "the trail was not unwound assignment by assignment"
+    );
+    // Two assignments per step, not one per variable. Clearing the vector
+    // instead would be 50,000 x 100,001 writes.
+    let ceiling = u64::from(CHAIN).saturating_mul(4);
     assert!(
-        elapsed.as_secs() < 20,
-        "50,000 steps took {elapsed:?}; the unwind is not O(assigned)"
+        outcome.stats.assignments <= ceiling && outcome.stats.assignments > 0,
+        "{} assignments over {CHAIN} steps is not O(assigned) per step",
+        outcome.stats.assignments
     );
 }
