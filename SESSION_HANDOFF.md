@@ -1,18 +1,25 @@
 # Session handoff
 
-**State:** milestone 1 is built, reviewed and green. Branch `design/milestone-1`,
-pushed; `main` untouched at the initial commit.
+**State:** milestone 1 is built, reviewed, green and **on `main`** (4b6bb9e).
+Milestone 1b is in design on branch `design/milestone-1b`: `docs/TDD.md` part 2,
+the PRD's 1b section and the App Flow delta are written. No code has changed.
 
-Build order steps 1 to 10 in `docs/TDD.md` are done, and the findings from the
-test, security and release reviews that followed are fixed. The suite is 53
+Build order steps 1 to 10 in `docs/TDD.md` part 1 are done, and the findings from
+the test, security and release reviews that followed are fixed. The suite is 53
 tests: 8 positive, 12 corruption controls, 19 boundary, 10 CLI, 4 trust
 boundary.
 
 ## Exact next step
 
-Decide whether milestone 1 goes to `main`. Nothing else is outstanding on this
-branch. The two questions that gate the decision are open questions 1 and 2
-below, and both are the owner's, not the code's.
+Build order **step 2 of `docs/TDD.md` part 2**: extend `tools/instances.py` and
+`tools/gen_fixtures.sh`, generate the new fixtures, commit them.
+
+It is gated on **part 2 open question 1** — whether a 49 KB vdW certificate
+derived from the author's `MathRecords` work belongs in the committed corpus, or
+whether every vdW check stays in the local differential harness. That answer is
+the owner's; everything after it is mechanical.
+
+The milestone-1 record below is kept as it was written.
 
 ## Verified in CI
 
@@ -111,9 +118,12 @@ described, and `actions/checkout` is pinned to a commit.
    lower it per platform.
 3. **Playground certificate set (milestone 4).** Unchanged from `docs/PRD.md`.
 
-Question 2 in the PRD — the LICENCE copyright line — was taken as
-`Copyright (c) 2026 Refute contributors`, its proposed value. No personal name
-appears anywhere in the repository.
+Question 2 in the PRD — the LICENCE copyright line — **was not taken as this
+paragraph used to claim.** It said the line read `Copyright (c) 2026 Refute
+contributors`; `LICENCE` carries the owner's public name, which is what the PRD
+records the owner deciding. The file wins and the paragraph is corrected here.
+Nothing else about the repository's identity has changed: no email, no location,
+no build path, no machine name appears in any tracked file.
 
 ## Deviations from the written build order, and why
 

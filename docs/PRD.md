@@ -184,3 +184,147 @@ All three were answered by the owner on 2026-08-13.
 - **Two-way verdict (`VERIFIED` / `NOT VERIFIED`).** Rejected on evidence: 2 % of
   real lines are constructs milestone 1 does not implement, and reporting
   "NOT VERIFIED" for them would be a false rejection — a different lie.
+
+---
+
+# Milestone 1b — RAT hint blocks
+
+**Status:** draft · **Date:** 2026-08-13 · **TDD:** [TDD.md, part 2](TDD.md#part-2--milestone-1b-rat-hint-blocks)
+
+## Problem
+
+Milestone 1 shipped a checker that is honest and nearly useless. It checks 96 %
+of the addition lines in a real `drat-trim -L` file, but the first line it
+cannot check arrives on line 2 of almost every real proof, so in practice it
+checks nothing an outsider would bring it. Measured on the release binary
+today: pigeonhole 8x7 stops at line 2, the author's A217058 a(4)-rung
+certificate stops at line 28.
+
+The gap is one construct: the RAT step, in its two shapes — a hint list with
+resolvent blocks, and a hint list that is empty because the pivot has no
+resolution candidate. Both were measured during milestone 1. Neither is exotic:
+they appear in the author's own vdW certificates at every rung with a non-zero
+wildcard budget, which is every rung whose upper bound is interesting.
+
+## Who it is for
+
+The same three people as milestone 1, but for the first two this is the
+milestone that makes the tool exist at all:
+
+1. **The author**, re-checking published certificates with a second
+   implementation. Today that is impossible for every certificate that matters.
+2. **A reader** who wants to check one of those certificates without building a
+   C program.
+3. Anyone with an LRAT proof from `drat-trim`.
+
+## Success looks like
+
+- [ ] `real_rat_proof` (pigeonhole 5x4) reports `s VERIFIED`, exit 0. It reports
+      `s UNSUPPORTED` today, and the fixture is already committed.
+- [ ] Pigeonhole 8x7 — 2,873 lemmas, 70 RAT lines, 56 empty-hint lines —
+      verifies, agreeing with `drat-trim` on the same two files.
+- [ ] At least one real vdW certificate from the author's published work
+      verifies, agreeing with `drat-trim`.
+- [ ] Eight new corruption controls, one per new rejection rule, each observed
+      failing before its rule existed, each naming the resolvent block it died
+      on.
+- [ ] **A proof whose empty hint list is a lie is rejected.** Take a real
+      empty-hint line, reorder the lemma so its pivot does have resolution
+      candidates, and the checker must reject it. A checker that trusts the
+      empty list passes every other test in the suite.
+- [ ] No input file causes a panic, an unbounded allocation or a hang.
+- [ ] `s UNSUPPORTED` still means something: it survives as the answer to a
+      binary proof file, which is a real mistake a user makes.
+
+## Requirements
+
+**Must**
+
+- RAT step checking: pivot from the lemma's first literal; the candidate set
+  computed by the checker from its own database; every candidate covered by
+  exactly one resolvent block; every block checked by unit propagation from the
+  negated lemma plus the hint prefix.
+- The vacuous case — no hints at all — accepted **only** after the checker has
+  independently established that the pivot has no resolution candidate.
+- Fail closed where the predicate cannot be evaluated: an empty lemma has no
+  pivot, so a RAT-shaped step on one is a rejection, not an acceptance.
+- Rejections locate themselves: step id, proof line, and the resolvent block.
+- The three-way verdict survives, with `UNSUPPORTED` reserved for a construct
+  that is genuinely unimplemented.
+- No new dependency. MSRV stays 1.74.0 and CI keeps testing on it.
+
+**Should**
+
+- `--stats` reports the RAT-side counters, including the number of clauses the
+  candidate scan examined, so the one performance bet in the design is
+  observable on any real proof rather than argued about.
+- A differential harness against `drat-trim`, run locally, its table recorded.
+
+**Won't (this time)**
+
+- DRAT checking, backward checking, trimming, LRAT emission, binary LRAT
+  reading, unsatisfiable-core extraction, parallelism. Unchanged from milestone 1.
+- An occurrence index for the candidate scan. Measured as three times the cost of
+  the scan it would replace on the two largest real proofs; see the TDD.
+- Pivot search. If the lemma's first literal is not the pivot the file names,
+  the step is rejected — the checker never hunts for a literal that would make
+  the step pass.
+
+## Explicitly out of scope
+
+- **Accepting a proof because its producer says so.** Every quantity the verdict
+  depends on is recomputed: the candidate set, the resolvent, the conflict. The
+  hint list is a claim to be checked, never an instruction to be followed.
+- **Matching `drat-trim` bug for bug.** Where real output never exercises a
+  shape, Refute is strict about it and says so in the README. Two of those rules
+  are new in 1b and each carries its own reason code so a disagreement is
+  localised in one line rather than argued about.
+- **The 200 MB rung.** The largest artefact this milestone checks is 8.2 MB.
+  Milestone 3 owns memory and scale, and the TDD writes down the measurement
+  that would trigger the data-structure change.
+
+## Safety and privacy
+
+- **Personal data:** none, unchanged. The tool reads mathematical artefacts.
+- **The serious defect is unchanged and now has a second route.** A false
+  `VERIFIED` would launder a wrong theorem. Milestone 1's route was a bad RUP
+  check; 1b adds two more — a skipped resolution candidate, and an empty hint
+  list taken at face value. Both are designed against explicitly, and both have
+  a committed corruption control that was observed failing first.
+- **Revocation** still has no meaning: no accounts, no sessions, no server, no
+  stored state.
+- **Worst outcome if wrong:** the author cites Refute as independent
+  corroboration of an upper bound that is false. The mitigation that matters
+  most is the ordering rule in the TDD's rollback section — the README's claim
+  about what Refute checks is rewritten only after the differential harness has
+  agreed with `drat-trim` on real proofs, never before.
+
+## Open questions
+
+1. **Does a vdW certificate belong in the committed fixture corpus?** 49 KB, and
+   it couples this repository to the author's `MathRecords` artefacts. It is the
+   only way a real certificate of a published term is checked by CI on every
+   commit. Needed before fixtures are generated. See TDD part 2, question 1.
+2. **Is a RAT line whose prefix already conflicts a rejection?** Specified as
+   one, on milestone 1's reasoning. Only a producer other than `drat-trim` could
+   trip it. See TDD part 2, question 2.
+
+## Not doing / rejected alternatives
+
+- **Trusting the empty hint list.** It is the shortest possible implementation
+  and it accepts every clause in the world. Rejected on the arithmetic: 134 of
+  134 measured empty-hint lines really do have zero resolution candidates, so
+  checking costs nothing and not checking costs everything.
+- **Deriving the pivot instead of taking it from the file.** Accepting any
+  literal of the lemma that makes the step check out is sound — a clause is RAT
+  if it is RAT on some literal — but it is a search where the format promises an
+  answer, and it turns "wrong pivot" from a rejection into a slow acceptance.
+  Measured: the first literal is the only one consistent with the block set on
+  every RAT line, and the only one with no candidate on every empty-hint line.
+- **Keeping `Unsupported::RatHints` and `EmptyHints` as unreachable variants.**
+  Milestone 1 removed `Reason::DuplicateId` for exactly this reason: a verdict
+  nothing can produce is decoration, and decoration in a trust boundary is
+  worse than absent.
+- **Deleting the third verdict entirely.** It would have to come back for binary
+  LRAT, DRAT and whatever milestone 5 wants, and the CLI contract — exit 2 —
+  would move twice.

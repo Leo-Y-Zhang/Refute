@@ -1,7 +1,15 @@
-# TDD — Refute milestone 1: forward LRAT checker
+# TDD — Refute: forward LRAT checker
 
-**Status:** draft
+**Status:** part 1 built · part 2 draft
 **Date:** 2026-08-13 · **PRD:** [PRD.md](PRD.md) · **Repo:** Refute
+
+Part 1 is milestone 1 — RUP steps with hints — and is built, reviewed and green.
+Nothing in it is amended below; [part 2](#part-2--milestone-1b-rat-hint-blocks)
+adds RAT hint blocks and states, per rule, where it changes a part 1 decision.
+
+---
+
+# Part 1 — milestone 1: RUP with hints
 
 ## Approach
 
@@ -364,3 +372,574 @@ or it is a lie by omission.
    written, and CI has since run the same leg on Ubuntu and on Windows: 53
    passed, 0 failed, on `rustc 1.74.0 (79e9716c9 2023-11-13)`. The floor is
    measured on two operating systems rather than on one machine.
+
+---
+
+# Part 2 — milestone 1b: RAT hint blocks
+
+**Status:** draft · **Date:** 2026-08-13 · **Supersedes:** nothing in part 1
+
+Part 1 checks 96 % of the addition lines a real `drat-trim -L` file contains and
+reports the other 4 % as `s UNSUPPORTED`. Because the first of those lands on
+line 2 of almost every real proof, the practical coverage is not 96 % but zero.
+Part 2 closes that. It changes one part-1 decision, marked **[changes part 1]**
+where it appears.
+
+## The measurement, first
+
+Same discipline as part 1: the semantics were derived from real files before a
+line of the design was written, using a throwaway reference checker. Every proof
+below is `kissat --no-binary` then `drat-trim -L`, produced on 2026-08-13, and
+every one of them is **verified end to end by the algorithm specified in this
+document** — that is the evidence the semantics below are the real ones and not
+a reading of a paper.
+
+| proof | originals | additions | RUP | RAT | empty-hint | deletions | LRAT |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pigeonhole 5x4 (`real_rat_proof`) | 45 | 80 | 60 | 12 | 8 | 61 | 3.2 KB |
+| pigeonhole 6x5 | 81 | 169 | 139 | 15 | 15 | 114 | 10 KB |
+| pigeonhole 7x6 | 133 | 624 | 552 | 42 | 30 | 353 | 55 KB |
+| pigeonhole 8x7 | 204 | 2,873 | 2,747 | 70 | 56 | 1,459 | 386 KB |
+| A217058 rung 0 (n=18, j=0) | 207 | 109 | 109 | 0 | 0 | 104 | 5.6 KB |
+| A217058 rung 1 (n=21, j=1) | 552 | 456 | 416 | 24 | 16 | 321 | 42 KB |
+| A217058 rung 2 (n=25, j=2) | 755 | 2,019 | 1,959 | 36 | 24 | 1,149 | 257 KB |
+| A217058 rung 3 (n=29, j=3) | 987 | 8,281 | 8,121 | 96 | 64 | 4,293 | 1.3 MB |
+| A217058 rung 4 (n=33, j=4) | 1,249 | 23,281 | 23,086 | 117 | 78 | 11,797 | 4.1 MB |
+| A217236 rung 0 (n=55, j=0) | 1,103 | 6,382 | 6,382 | 0 | 0 | 3,538 | 738 KB |
+| A217236 rung 1 (n=71, j=1) | 4,610 | 34,119 | 34,089 | 15 | 15 | 17,625 | 8.2 MB |
+| 3 random 3-SAT (80/370, 60/280, 100/460) | 910 | 1,958 | 1,958 | 0 | 0 | 1,153 | 127 KB |
+
+Two things in that table are worth saying out loud before anything else.
+
+- **Part 1 already verifies a real certificate of a published term.** A217236
+  rung 0 is pure RUP: 6,382 additions, 88,882 hints, `s VERIFIED`, exit 0, run
+  on the release binary during this design. The README's opening is therefore
+  *too* pessimistic today, not too optimistic, and the correction belongs in the
+  same commit as the rest of the README change.
+- **RAT is not a pigeonhole curiosity.** It appears in the author's own vdW
+  certificates at every rung with a non-zero wildcard budget, which is every
+  rung that matters.
+
+### The eleven structural facts the design rests on
+
+Each was counted, not assumed. "0 of N" means the reference checker looked for
+it in every RAT-shaped line of every proof above and never found it.
+
+| # | Fact | Evidence |
+|---|---|---|
+| F1 | A hint list is a possibly-empty **prefix** of positive ids, then zero or more **resolvent blocks**, each opened by a negative id and followed by its own positive hints | shape of all 703 blocks |
+| F2 | **The pivot is the lemma's first literal, as written in the file** | see F3, F4 |
+| F3 | Every block names a live clause containing the negated pivot | 0 exceptions in 703 blocks |
+| F4 | On an empty-hint line the first literal is the **only** literal of the lemma with no resolution candidate | 134 of 134 |
+| F5 | The blocks name **exactly** the live candidate set — no candidate uncovered, no block naming a non-candidate | 0 of 703 either way |
+| F6 | A block's base assignment is the negated lemma **plus the prefix's unit propagations**. Without the prefix, no block checks | 100 % of RAT lines fail the alternative |
+| F7 | Every block in every real proof has an **empty** hint list and conflicts on the resolvent's negation alone | 703 of 703 |
+| F8 | The prefix never reaches a conflict on a line carrying blocks | 0 of 439 |
+| F9 | An empty hint list always means "zero resolution candidates", never "check nothing" | 134 of 134 |
+| F10 | No block names a clause deleted earlier | 0 of 703 |
+| F11 | The lemma of a RAT-shaped line is never empty | 0 of 573 |
+
+F7 is the one that costs money. **No real file exercises resolvent-block hint
+propagation**, so that path would ship with zero coverage from generated
+fixtures — exactly the hole `b12b` was invented for in part 1. The answer is
+part 1's answer for `unit_chain`: one hand-built pair, with the same lemma
+sequence independently verified by `drat-trim` in DRAT form. One was constructed
+and validated during this design; its bytes are in the fixture section below.
+
+F6 is the one that would have been guessed wrong. A design that checked each
+resolvent from the negated lemma alone reads perfectly well and rejects every
+real proof on its first RAT line.
+
+## The RAT step, normative
+
+### Grammar
+
+```
+addition := id lit* 0 hint* 0
+hint*    := prefix block*
+prefix   := id*                     ; positive, possibly empty
+block    := "-" id  id*             ; the clause resolved against, then its hints
+```
+
+### Algorithm
+
+`check_add` keeps its part-1 shape: classify the hint list before anything else,
+then check. `Hints::Rup` is unchanged. `Hints::Rat` and `Hints::Empty` both go
+to `check_rat`, `Empty` with an empty prefix and no blocks — the vacuous case is
+the general case with nothing in it, and giving it its own code path is how the
+two drift.
+
+```
+check_rat(id, lits, prefix, blocks):
+  mark = trail.len()
+  for l in lits:                                   # exactly as in part 1
+      if assigned_true(-l): unwind(mark); return Ok       # tautology, sound
+      assign(-l, true)
+  if lits.is_empty(): unwind(mark); reject RatWithoutPivot
+  pivot = lits[0]                                  # FILE order, before normalize
+  match walk(prefix):                              # part 1's hint walk
+      Err(reason)      -> unwind(mark); reject reason
+      Ok(Some(hint))   -> unwind(mark); reject RatLemmaIsRup(hint)
+      Ok(None)         -> {}
+  base = trail.len()
+  remaining = { c in db | -pivot in db[c] }         # the live candidate set
+  for (clause, hints) in blocks:
+      if !remaining.remove(clause):
+          unwind(mark); reject NotAResolutionCandidate{pivot} @ clause
+      falsified = false
+      for l in db[clause]:
+          if l == -pivot: continue                  # resolved away
+          match value(l):
+              TRUE  -> falsified = true; break      # resolvent already refuted
+              FALSE -> {}
+              UNSET -> assign(-l, true)
+      if falsified:
+          if !hints.is_empty(): unwind(mark); reject ResolventFalsifiedEarly @ clause
+      else:
+          match walk(hints):
+              Err(reason) -> unwind(mark); reject reason @ clause
+              Ok(None)    -> unwind(mark); reject NoConflict @ clause
+              Ok(Some(_)) -> {}
+      unwind(base)
+  if let Some(clause) = remaining.min():
+      unwind(mark); reject MissingResolvent{pivot} @ clause
+  unwind(mark); return Ok
+```
+
+`walk(hints)` is part 1's hint loop, factored out and otherwise untouched:
+`Ok(Some(h))` means the last hint `h` was falsified and nothing before it was,
+`Ok(None)` means the list ran out with no conflict, `Err` is one of the existing
+four hint rejections. Part 1's `check_rup` becomes
+`if walk(hints)?.is_none() { reject NoConflict }`, which is the same program.
+
+`@ clause` sets the new `Rejection::resolvent` field: *this happened while
+checking the resolvent with clause N*.
+
+### Why it is sound
+
+A clause `C` is RAT on pivot `p` in `C` with respect to formula `F` when, for
+every clause `D` in `F` with `-p` in `D`, the resolvent `C or (D \ {-p})` is
+implied by `F` by unit propagation. Adding a RAT clause preserves
+satisfiability, so if `F + C` is unsatisfiable then `F` is. That is the whole
+argument, applied once per addition and composed backwards from the empty
+clause.
+
+Three places where a checker can lose it, and what this design does:
+
+1. **The candidate set must be complete.** Miss one clause holding `-p` and the
+   RAT condition was never checked; adding an arbitrary clause is then
+   sound-looking and wrong. The candidate set is therefore computed by the
+   checker from its own database, never read from the file. The producer's block
+   list is only ever used to *satisfy* that set, never to define it.
+2. **The vacuous case must be proved, not assumed.** `205 57 -29 0 0` is a valid
+   lemma whose pivot has no candidate. Accepting it because the hint list is
+   empty is a checker that accepts anything with an empty hint list — the single
+   largest false-accept hole in this milestone. It is accepted only after the
+   scan has returned an empty candidate set. Same code, same scan, no special
+   case: F9 is a measured property of real files, not a rule the checker trusts.
+3. **`F` is the live database.** Deletion removes clauses, and a superset of an
+   unsatisfiable set is unsatisfiable, so a step checked against the smaller
+   formula still refutes the larger one. A clause deleted before the step
+   therefore needs no resolvent block (F10), and demanding one would be a false
+   rejection. A block naming a deleted clause is rejected — not because skipping
+   it would be unsound, but because it names something that is not there, and a
+   producer that does that is not producing this proof.
+
+### The strictness decisions, and what each costs
+
+Part 1's rule stands: strict wherever real output never does the thing, because
+strictness that costs nothing buys mutation resistance. Each of these is
+measured at zero occurrences across the eleven proofs above.
+
+| Rule | Alternative | Why strict |
+|---|---|---|
+| Blocks must name exactly the candidate set | Skip candidates whose resolvent is trivially refuted | **The load-bearing one.** Every real block conflicts on negation alone (F7), so the permissive rule would accept the deletion of *any* real block. "Missing resolvent block" would then be undetectable — the exact mutation this milestone is required to catch |
+| A block naming a non-candidate is rejected | Ignore it | An ignored block hides a deleted clause, a wrong pivot and a duplicate in one |
+| A prefix that conflicts on a line with blocks is rejected (`RatLemmaIsRup`) | Accept: the lemma is RUP, which is sound | Consistent with part 1's `EarlyConflict`. It is the one rule here with a plausible false-rejection risk against a producer other than `drat-trim`; it has its own reason code so the differential harness localises it in one line, and relaxing it is a one-line change |
+| Hints after a resolvent its own negation already refuted are rejected | Ignore them | Padding. Same argument as `EarlyConflict` |
+| An empty lemma with RAT-shaped or absent hints is rejected (`RatWithoutPivot`) | Treat as vacuously RAT | **Fail closed.** There is no first literal, so there is no pivot, so the RAT predicate cannot be evaluated. A checker that accepts `1 0 0` accepts a bare empty clause on no evidence at all |
+| An empty prefix on a line with blocks is **accepted** | Reject | Never observed with blocks, but it is legal and harmless: the base is then the negated lemma alone. Strictness here would forbid a shape no measurement condemns |
+| Reversing a block's hints is **not** guaranteed to be rejected | — | Not a rule, a finding. On the hand-built fixture the reversed list is a second valid propagation order and verifies. A test asserting that reversal is rejected would assert something untrue; the block mutations always caught are redirect and drop |
+
+### Where the pivot comes from, and the trap in it
+
+`pivot = lits[0]` is the literal **as written in the proof file**. `normalize`
+sorts and deduplicates on the way into the database, and sorting changes the
+first literal: `real_rat_proof` line 2 is `46 21 -9 0 0`, whose sorted form
+begins `-9`. A checker taking the pivot after normalisation scans for clauses
+containing `9`, finds several, and rejects the fixture with `MissingResolvent`.
+The corpus catches this on its smallest RAT proof, which is why no separate test
+is specified for it — but the coder should know the trap is there.
+
+## Data model
+
+No database, no migrations; part 1's table stands. The changes are in three
+types and one new structure.
+
+| Structure | Change |
+|---|---|
+| `Hints` | `Rat` gains a payload: `Rat { prefix: Vec<ClauseId>, blocks: Vec<ResolventBlock> }`. **[changes part 1]** — part 1 deliberately discarded RAT hint values because "a half-understood hint list is worse than none"; they are now fully understood |
+| `ResolventBlock` | New: `{ clause: ClauseId, hints: Vec<ClauseId> }` |
+| `Rejection` | Gains `resolvent: Option<ClauseId>` — the block being checked when the rejection happened. One test constructs `Rejection` literally today, so the churn is one line |
+| `Reason` | Five new variants (below). The existing eight are unchanged and are reused verbatim inside blocks |
+| `Unsupported` | `RatHints` and `EmptyHints` are **removed**; `BinaryProof { line }` replaces them |
+| `Stats` | Six new counters (below) |
+| candidate set | Built per RAT step by scanning the live database; see the decision below |
+
+New reasons, every one of them producible by a committed fixture:
+
+```rust
+RatWithoutPivot,                        // empty lemma, RAT-shaped or absent hints
+MissingResolvent { pivot: Lit },        // resolvent: Some(the uncovered candidate)
+NotAResolutionCandidate { pivot: Lit }, // resolvent: Some(the named clause)
+ResolventFalsifiedEarly,                // resolvent: Some(clause); its hints unreachable
+RatLemmaIsRup(ClauseId),                // the prefix hint that already conflicted
+```
+
+New counters. They exist to be asserted exactly, not to be admired:
+
+```rust
+rat_additions: u64,            // additions carrying at least one resolvent block
+vacuous_rat_additions: u64,    // additions with no hints at all
+resolvent_blocks: u64,         // blocks checked
+candidate_scans: u64,          // additions that scanned the database
+candidates_examined: u64,      // clauses visited by those scans
+resolution_candidates: u64,    // candidates those scans found
+```
+
+`candidate_scans` must equal `rat_additions + vacuous_rat_additions` on every
+run: a checker that scans on every addition, or that forgets to scan on the
+vacuous ones, is caught by an equality rather than by a stopwatch.
+
+### The occurrence-tracking decision
+
+The candidate set needs "every live clause containing `-pivot`". Two ways:
+
+- **A.** Scan the live database, once per RAT-shaped addition.
+- **B.** Maintain `HashMap<Lit, Vec<ClauseId>>` occurrence lists, updated on
+  every insert and lazily on every delete.
+
+Measured on the real corpus, against the propagation work the checker already
+does for its hints — the honest denominator, because both options are only worth
+what they cost relative to that:
+
+| proof | hint literal visits | A: clauses scanned | B: index slot updates | A/work | B/work |
+|---|---:|---:|---:|---:|---:|
+| pigeonhole 5x4 | 792 | 886 | 679 | 1.12 | 0.86 |
+| pigeonhole 6x5 | 3,797 | 2,280 | 1,870 | 0.60 | 0.49 |
+| pigeonhole 7x6 | 26,370 | 8,118 | 6,505 | 0.31 | 0.25 |
+| pigeonhole 8x7 | 207,795 | 20,069 | 41,697 | 0.10 | 0.20 |
+| A217058 rung 4 | 2,081,209 | 153,306 | 493,009 | 0.07 | 0.24 |
+
+**A, by measurement.** The crossover is between 6x5 and 8x7 and it moves the
+right way: the scan's share falls as proofs grow, because `drat-trim` deletes
+aggressively — the live database peaks at 1,354 clauses on a 4.1 MB proof — while
+the index must be maintained for every one of the quarter of a million clauses
+that ever exists. B is more code, more memory and, on the two largest real
+proofs measured, three times the work. Lazy deletion in B is at least safe here:
+identifiers are strictly increasing, so a stale entry can never be resurrected
+by a later reuse of its id. It is still not worth it.
+
+This is a bet on `drat-trim`'s deletion behaviour, so it is written down as one:
+the scan is `O(RAT lines x live clauses)` and could in principle go quadratic
+against a producer that never deletes. The mitigations are all cheap:
+
+- the whole decision lives behind one function,
+  `fn resolution_candidates(&self, pivot: Lit) -> Vec<ClauseId>`, and swapping in
+  option B changes that function and nothing else, with the same tests;
+- `--stats` reports `candidates_examined`, so the bet is *observable on any real
+  proof a user runs* rather than re-derived by whoever revisits it;
+- milestone 3 re-measures on the 200 MB rung, and the trigger is written now: if
+  `candidates_examined` exceeds the hint literal visits on a real proof, build
+  the index.
+
+No new dependency either way. `HashMap` is already in use.
+
+### Binary proofs, and what `UNSUPPORTED` is for now
+
+After 1b nothing in the LRAT addition grammar is unimplemented, so the three-way
+verdict needs a genuine third case or it becomes decoration — and part 1 already
+removed one rejection reason for being unreachable. There is a real one, and it
+is the mistake this project's own PRD documents:
+
+```
+$ kissat formula.cnf proof.drat          # forgot --no-binary
+$ refute formula.cnf proof.drat
+s NOT VERIFIED
+refute: proof line 1: expected an integer, found 'a*\x13\x00a*\x03\x00a+\x0b...'
+```
+
+Measured today, on this machine. A tool failure reported as a bad proof is
+precisely the confusion the PRD says `drat-trim` causes on Windows and that
+Refute exists to remove. Binary DRAT and binary LRAT both begin every record
+with `a` (0x61) or `d` (0x64); a text LRAT line always begins with a decimal
+step id. So:
+
+- **Rule:** if the first byte of the proof's first non-empty line, after the
+  optional byte order mark, is `a` or `d`, the verdict is
+  `Unsupported(BinaryProof { line: 1 })`, exit 2, with a message naming the fix
+  (`--no-binary`, then `drat-trim -L`).
+- **Implementation:** a new `ParseErrorKind::BinaryProof`, produced by
+  `LratReader` on line 1 only, and mapped to `Unsupported` at the single place
+  in `Checker::run` that turns a parse error into a verdict. That mapping is a
+  weakening — a rejection becomes an unsupported — so it is written as an
+  explicit one-kind match with no wildcard, and a test asserts that every other
+  kind still produces `NotVerified`.
+- **It cannot produce a false `VERIFIED`.** It has no route to `Verified` at
+  all, and it cannot mask a corrupt text proof, because a corrupt text proof
+  does not begin with `a` or `d` unless it is binary.
+- The formula side is not sniffed: `kissat` writes binary *proofs* by default,
+  which is where the mistake is, and a binary file offered as DIMACS already
+  fails with a parse error naming line 1.
+
+## Interfaces
+
+```rust
+// lrat.rs
+pub struct ResolventBlock { pub clause: ClauseId, pub hints: Vec<ClauseId> }
+pub enum Hints {
+    Rup(Vec<ClauseId>),
+    Rat { prefix: Vec<ClauseId>, blocks: Vec<ResolventBlock> },
+    Empty,
+}
+
+// verdict.rs
+pub struct Rejection {
+    pub step: Option<ClauseId>,
+    pub line: u64,
+    pub resolvent: Option<ClauseId>,
+    pub reason: Reason,
+}
+pub enum Unsupported { BinaryProof { line: u64 } }
+
+// checker.rs — signatures unchanged
+pub fn check<R: BufRead>(cnf: &Cnf, proof: LratReader<R>, limits: &Limits) -> Verdict;
+```
+
+`check`'s contract is unchanged and still total: a verdict for every input, no
+panic, no unbounded allocation, no read past the first failing step.
+
+**Parser bounds.** `Limits::max_clause_len` now bounds the *total* number of
+hint tokens on a line — prefix, block markers and block hints together — rather
+than each list separately, so a line of ten million one-hint blocks fails at the
+same ceiling a ten-million-hint list does. A negative token is scanned by the
+existing `scan_i64` and its magnitude taken with `unsigned_abs`; `i64::MIN` is
+unreachable because `scan_i64` rejects it as an overflow, so no new arithmetic
+appears on the untrusted path. `-0` remains a parse error, as it is today.
+
+## Access control
+
+Unchanged from part 1: no database, no accounts, no network, no stored state.
+The untrusted-input table stands, with two rows added.
+
+| Attack | Vector | Control |
+|---|---|---|
+| Unbounded allocation | A hint list of 10^9 one-hint resolvent blocks | `max_clause_len` applied to the whole hint list, block markers included |
+| Quadratic blow-up | A proof that adds a million clauses, never deletes, then emits RAT lines | Inherent to option A above, and bounded by input length rather than unbounded. `candidates_examined` makes it visible under `--stats`; milestone 3 re-measures. Not a soundness issue |
+
+## Migrations
+
+None; there is no database. The part-1 equivalents stand, with one addition:
+
+| # | Change | Reversible? | Rollback |
+|---|---|---|---|
+| 3 | `Unsupported::RatHints` / `EmptyHints` removed, `BinaryProof` added | Yes | `git revert`. A library API change in a 0.1.0 crate with no dependants; the CLI's exit codes and verdict strings do not move, so no consumer contract does |
+
+## Failure modes
+
+Part 1's table stands. What 1b adds or changes:
+
+| What breaks | Who notices | How we detect it | How we undo it |
+|---|---|---|---|
+| **False `VERIFIED` from a skipped candidate** — the new serious one | Nobody, for months | The candidate set is computed by the checker, never read from the file; "missing resolvent block" and "wrong pivot" are committed rejection controls; the differential harness disagrees with `drat-trim` | Revert; withdraw any claim citing Refute in the same session |
+| False `VERIFIED` from trusting an empty hint list | Nobody | `r05_empty_hints_with_candidates`: a real empty-hint line whose lemma is reordered so the pivot *does* have candidates. Rejected `MissingResolvent` | As above |
+| False rejection of another producer's valid RAT proof | The author, immediately | `RatLemmaIsRup` and `ResolventFalsifiedEarly` have their own reason codes, so the differential harness names the rule in one line | Relax the named rule; each is one branch |
+| The candidate scan goes quadratic | Anyone checking a large proof | `candidates_examined` under `--stats`; the milestone-3 benchmark | Occurrence index behind `resolution_candidates`; measured before adopted |
+| A binary proof reported as a bad proof | A user who forgot `--no-binary` | Fixed by this milestone; `b14_binary_proof` is the control | — |
+| `UNSUPPORTED` becomes unreachable in practice | A reader who trusts the three-way verdict | `b14` is a real binary proof from `kissat`, not a hand-written construct | If the variant ever becomes genuinely unreachable, remove it as `Reason::DuplicateId` was removed |
+
+## Rollback
+
+`git revert` plus `cargo build`, under a minute. No database, no deployment, no
+persistent state, no consumer contract broken: exit codes and verdict strings
+are unchanged.
+
+The one irreversible act remains **publishing a claim**. Milestone 1b is what
+part 1 said the author's certificate claims were gated on, so the sequence
+matters and is a hard order:
+
+1. the suite green, including the new rejection controls, on both toolchains;
+2. the differential harness run locally against `drat-trim` on the real proofs,
+   its output pasted into the commit;
+3. *then* the README's opening limitation paragraph rewritten;
+4. any claim about the author's certificates cites that differential run.
+
+Rewriting the README before step 2 is the one thing in this milestone that
+cannot be taken back.
+
+## Test plan
+
+Framework unchanged: `cargo test`, no test dependencies, committed fixtures.
+Every new rejection rule is written first, run against the part-1 checker, and
+**observed failing** — against the part-1 build every one of them reports
+`UNSUPPORTED` where a rejection is required, which is a real red rather than a
+compile error. The failing output goes into the commit message.
+
+### Corpus additions
+
+Roughly 130 KB added against a 500 KB budget; the corpus is ~115 KB today.
+
+| Fixture | Origin | Size | Why it exists |
+|---|---|---|---|
+| `real_rat_proof` (existing) | pigeonhole 5x4 | 3.2 KB | **Flips from `UNSUPPORTED` to `VERIFIED`.** 12 RAT, 8 vacuous, 24 blocks |
+| `rat_pigeonhole` | pigeonhole 7x6 | 55 KB | Scale: 42 RAT, 30 vacuous, 108 blocks, 353 deletions. A subtly over-strict checker passes 5x4 |
+| `vdw_rung` | A217058 rung 1 (n=21, j=1), symmetry breaking off | 49 KB | A real certificate of a published term, under CI. Different family, 552 originals |
+| `resolvent_propagates` | hand-built; DRAT form verified by `drat-trim` | 200 B | **The only fixture with a resolvent block whose hints propagate** (F7). Bytes below |
+| `b14_binary_proof` | the first 64 bytes of `kissat`'s binary DRAT for pigeonhole 5x4 | 64 B | `Unsupported(BinaryProof)`, exit 2 |
+| `r01`–`r08` | deterministic mutations of the two RAT fixtures, by `tools/mutate.py` | ~25 KB | One per new rejection rule |
+
+Pigeonhole 8x7 (386 KB) stays out of the committed corpus, as it is today, and
+is covered by the differential harness. **The 8x7 flip is a gate on the
+milestone, not a CI fixture**: the requirement to see it verify is met by
+running it and recording the verdict in the commit.
+
+`resolvent_propagates`, in full, because it is the one fixture no generator
+produces:
+
+```
+formula                   proof
+p cnf 5 6                 7 1 3 0 -1 2 3 4 0
+-1 2 0                    8 0 5 6 7 1 0
+2 4 0
+-4 5 0
+-5 3 1 0
+-2 0
+-3 0
+```
+
+Lemma `(1 or 3)` is RAT on pivot `1` and is **not** RUP. Clause 1 is its only
+candidate; the resolvent `(1 or 3 or 2)` needs three propagations to reach a
+conflict, so the block carries three hints and the conflict lands on the last.
+Validated during design: `kissat` exits 20 on the formula, and `drat-trim`
+prints `s VERIFIED` for the same lemma sequence in DRAT form (`1 3 0` / `0`).
+
+### Positive — must return `Verified`, exit 0
+
+| # | Fixture | Asserts |
+|---|---|---|
+| P8 | `real_rat_proof` | The flip. Exact counters: 80 additions, 60 RUP, 12 RAT, 8 vacuous, 61 deletions, 286 hints, **20 candidate scans, 886 clauses examined, 24 blocks, 0 block hints**, peak 48 |
+| P9 | `rat_pigeonhole` | 624 additions, 552/42/30, 353 deletions, 8,755 hints, 72 scans, 8,118 examined, 108 blocks, peak 137 |
+| P10 | `vdw_rung` | 456 additions, 416/24/16, 321 deletions, 6,011 hints, 40 scans, 9,292 examined, 48 blocks, peak 552 |
+| P11 | `resolvent_propagates` | 2 additions, 1 RUP, 1 RAT, 7 hints, 1 scan, 6 examined, 1 block, **3 block hints** |
+| P1–P7 | existing | Unchanged, and `candidate_scans == 0` on every pure-RUP fixture |
+
+`candidate_scans == rat_additions + vacuous_rat_additions` is asserted on all of
+them. It is the assertion that kills the mutant that scans everywhere, and the
+one that kills the mutant that never scans on a vacuous line — which is the
+false-accept hole itself.
+
+### Negative — must not print `s VERIFIED`; exit non-zero
+
+Each was run against the proposed rules during design; the expectation column is
+what the reference implementation actually produced, not what it ought to.
+
+| # | Mutation of | Expected |
+|---|---|---|
+| R1 | `real_rat_proof`: the first two literals of a RAT lemma swapped (wrong pivot) | `NotAResolutionCandidate`, step 48, line 4, resolvent 46 |
+| R2 | `real_rat_proof`: the last resolvent block and its hints deleted | `MissingResolvent`, step 48, line 4, resolvent 47 |
+| R3 | `real_rat_proof`: a block redirected to a clause deleted earlier | `NotAResolutionCandidate`, step 65, line 32, resolvent 34 |
+| R4 | `resolvent_propagates`: the block's last hint redirected | `HintSatisfied`, resolvent 1 |
+| R4b | `resolvent_propagates`: the block's conflict hint dropped | `NoConflict`, resolvent 1 |
+| R5 | `real_rat_proof`: an empty-hint lemma reordered so its pivot has candidates | `MissingResolvent`, step 46, line 2, resolvent 3 |
+| R6 | `real_rat_proof`: an extra block naming a live non-candidate | `NotAResolutionCandidate`, resolvent 1 |
+| R7 | `real_rat_proof`: a hint appended to a block its own negation refutes | `ResolventFalsifiedEarly`, resolvent 47 |
+| R8 | a bare `9999 0 0`, and `9999 0 -1 0` | `RatWithoutPivot` for both. **Replaces N12**, which asserts `Unsupported(EmptyHints)` today: a bare empty clause with no hints is now a rejection, exit 1, not an unsupported construct |
+| N1–N11 | existing | Unchanged |
+
+R5 is the one to write first. A checker that accepts empty hint lists passes
+every other test in this suite.
+
+### Boundary
+
+| # | Input | Expected |
+|---|---|---|
+| B12 | `real_rat_proof` end to end | **Changes: `Verified`, exit 0.** It asserts `Unsupported(EmptyHints { line: 2 })` today |
+| B12b | the single RAT line lifted out of that proof | **Changes: `NotAResolutionCandidate`** — its blocks name clauses 46 and 47, which do not exist when the line stands alone. It keeps its value as the control that a RAT line is checked against the database it is in, not the one it came from |
+| B14 | a real binary DRAT proof | `Unsupported(BinaryProof { line: 1 })`, exit 2, asserted **not** exit 0 |
+| B15 | a hint list of `max_clause_len` block markers | `ParseError(ListTooLong)`, no allocation, no panic |
+| B16 | a RAT line whose lemma repeats its pivot (`1 1 3`) | Verifies; the pivot is the first literal and the repeat is idempotent |
+| B17 | a RAT line with blocks and an empty prefix | Verifies. `resolvent_propagates` is already this shape, so it is an assertion on P11 rather than a new fixture |
+| B18 | a block naming clause id 0 | Rejected `NotAResolutionCandidate`; id 0 is never in the database |
+| B1–B11, B13 | existing | Unchanged |
+
+### CLI-level
+
+The contract is unchanged. New assertions: `real_rat_proof` now exits 0 and
+prints `s VERIFIED`; the binary-proof fixture prints `s UNSUPPORTED`, exits 2,
+and its stderr names `--no-binary`; a RAT rejection's stderr carries the
+resolvent block id, because that is the number a person needs to find the line.
+
+### Differential harness (not CI)
+
+`tools/differential.sh`, taking `$KISSAT` / `$DRAT_TRIM` exactly as
+`gen_fixtures.sh` does, with an optional `--extra <dir>` of pre-built CNFs so
+that the author's vdW formulas can be included without this repository depending
+on another one. For each instance it runs solver, then `drat-trim` on the DRAT,
+then `drat-trim -L`, then `refute`, and prints a row: the two verdicts and
+whether they agree. Required to pass before the README changes:
+
+- pigeonhole 4x3, 5x4, 6x5, 7x6 and **8x7**;
+- three random 3-SAT refutations;
+- at least one real vdW certificate — A217058 rung 1 minimum, rung 4 preferred,
+  the latter being the 4.1 MB proof behind a published term.
+
+CI keeps neither binary and runs none of this; the committed bytes are what CI
+checks. The harness output goes into the commit message, as part 1's did.
+
+## Build order
+
+1. Branch `design/milestone-1b`. Documents only: this part, the PRD's 1b
+   section, the App Flow delta. Commit.
+2. `tools/instances.py`: pigeonhole 7x6 and the hand-built formula.
+   `tools/gen_fixtures.sh`: generate `rat_pigeonhole`, `resolvent_propagates`
+   (with the DRAT-form validation `unit_chain` already has), `b14_binary_proof`,
+   and take in `vdw_rung`. Commit the fixtures. Fixtures before tests, for part
+   1's reason: a test that fails because its fixture is missing is red for the
+   wrong reason.
+3. Write P8–P11, R1–R8, B12/B12b/B14–B18 against the **part-1** checker. Run.
+   Paste the failing output into the commit message. Commit red. *This commit is
+   the evidence for the milestone.*
+4. `src/lrat.rs`: `ResolventBlock`, `Hints::Rat { prefix, blocks }`, the total
+   hint-token bound, `ParseErrorKind::BinaryProof`. B14, B15, B18 go green.
+5. `src/verdict.rs`: the five reasons, `Rejection::resolvent`, `Unsupported`
+   replaced. Nothing goes green; the build compiles.
+6. `src/checker.rs`: factor `walk` out of `check_rup`. No behaviour change, and
+   the whole part-1 suite must still be green at this commit — that is the point
+   of doing it on its own.
+7. `src/checker.rs`: `resolution_candidates`, then `check_rat`, one rejection
+   rule at a time, R5 first. P8–P11 and R1–R8 go green.
+8. CLI: the resolvent block in the message, the binary-proof message. The CLI
+   tests go green.
+9. Full suite on stable and on 1.74.0, locally, both profiles.
+10. `tools/differential.sh`; run it; paste the table into the commit.
+11. **Only now:** the README's opening limitation paragraph, the fixture
+    README's provenance table, `SESSION_HANDOFF.md`.
+12. Push the branch. CI green on all five jobs. Stop; merging is the owner's.
+
+## Open questions
+
+1. **Does the vdW fixture belong in this repository?** `vdw_rung` is 49 KB of
+   CNF and LRAT derived from the author's `MathRecords` work. It puts a real
+   certificate of a published term under CI, which is the whole point of the
+   project, but it couples two repositories' artefacts and its provenance line
+   has to name the generator. The alternative leaves every vdW check to the
+   differential harness, where nothing is committed. **Needed before step 2.**
+2. **Is `RatLemmaIsRup` a rejection or an acceptance?** Strict is specified, on
+   the same evidence and the same reasoning as part 1's `EarlyConflict`: real
+   `drat-trim` output never does it. It is the only new rule with a plausible
+   false-rejection risk against a different LRAT producer. The decision changes
+   one branch; the question is whether Refute's stated audience is `drat-trim`
+   output alone. *Not a blocker — strict is the fail-closed default, and the
+   differential harness would expose a disagreement immediately.*
+3. **`Limits::max_var` (2^26)** — unchanged from part 1's open question 2, and
+   still milestone 4's to settle.

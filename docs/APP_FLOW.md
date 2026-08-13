@@ -82,6 +82,28 @@ animation, nothing that renders as a wall of escape codes in a log file.
 
 ---
 
+## Part 1b — what milestone 1b changes in the CLI (2026-08-13)
+
+No new screen, no new flag, no new exit code. Three of the rows above change
+their content.
+
+| Row | Was | Becomes |
+|---|---|---|
+| Unsupported | `refute: line 205: RAT hint block; milestone 1 checks RUP hints only` | `refute: proof line 1: this is a binary proof; refute reads text LRAT. Re-run kissat with --no-binary and drat-trim with -L` — the only remaining unsupported construct |
+| Not verified | `refute: step 331, line 197: hint 12 is already satisfied` | unchanged for RUP steps; a RAT step adds the block: `refute: step 48, proof line 4, resolvent block 47: no resolvent block for a clause holding the negated pivot -21` |
+| Not verified | a bare empty clause with no hints exited 2 | exits 1: `refute: step 9999, proof line 1: a lemma with no literals has no pivot` |
+
+The transition `Streaming --> Unsupported: RAT or empty hints` becomes
+`OpenFiles --> Unsupported: binary proof`, because the only unsupported
+construct is now recognised on the first line rather than mid-stream. Every
+other transition is unchanged.
+
+The dead-end note still applies and gets better: `UNSUPPORTED` now always names
+the command that fixes it, rather than naming a milestone the reader has to wait
+for.
+
+---
+
 ## Part 2 — Playground (milestone 4, designed not built)
 
 A static GitHub Pages page. WASM module, no server, no upload, no analytics, no
