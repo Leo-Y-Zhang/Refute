@@ -727,6 +727,20 @@ existing `scan_i64` and its magnitude taken with `unsigned_abs`; `i64::MIN` is
 unreachable because `scan_i64` rejects it as an overflow, so no new arithmetic
 appears on the untrusted path. `-0` remains a parse error, as it is today.
 
+**[changes part 1]** `Limits` gains a third field, `max_line_bytes`, default
+2^24: `pub struct Limits { pub max_var: u32, pub max_clause_len: usize, pub
+max_line_bytes: usize }`. Part 1's listing on line 109 is superseded by this
+one. The reader's own doc comment claimed a 200 MB proof was read in constant
+memory, and it was not: `read_line` buffers a whole line before any ceiling can
+apply to what is in it, so a 200 MB proof written on a single line peaked at
+**268.6 MB** of working set on the release binary and only then failed on
+`max_clause_len`. With the bound in place the same file is refused at 16 MB and
+the same measurement is **28.6 MB**. The proof reader takes `max_line_bytes + 1`
+bytes, so that a line of exactly the ceiling and a line one byte longer are told
+apart without a second look at the reader. It is deliberately not applied to the
+formula, whose parser holds every clause in memory anyway; there a line bound
+caps a fraction of an allocation the formula's own size already decides.
+
 ## Access control
 
 Unchanged from part 1: no database, no accounts, no network, no stored state.
@@ -736,6 +750,7 @@ The untrusted-input table stands, with two rows added.
 |---|---|---|
 | Unbounded allocation | A hint list of 10^9 one-hint resolvent blocks | `max_clause_len` applied to the whole hint list, block markers included |
 | Quadratic blow-up | A proof that adds a million clauses, never deletes, then emits RAT lines | Inherent to option A above, and bounded by input length rather than unbounded. `candidates_examined` makes it visible under `--stats`; milestone 3 re-measures. Not a soundness issue |
+| Unbounded allocation, before any list exists | A proof with no line breaks in it | `max_line_bytes`, applied by the read itself rather than to what the read produced. Measured at 268.6 MB before, 28.6 MB after, on the same 200 MB file |
 
 ## Migrations
 
@@ -871,6 +886,23 @@ every other test in this suite.
 | B17 | a RAT line with blocks and an empty prefix | Verifies. `resolvent_propagates` is already this shape, so it is an assertion on P11 rather than a new fixture |
 | B18 | a block naming clause id 0 | Rejected `NotAResolutionCandidate`; id 0 is never in the database |
 | B1–B11, B13 | existing | Unchanged |
+
+### Added after the build, not designed here
+
+Five tests and one limit were added while closing the milestone, after the code
+they cover existed. None of them can claim part 1's discipline of having been
+observed failing before its rule was written; each is justified instead by a
+mutation kill recorded in the commit that added it, which is the weaker
+evidence and is labelled as such wherever it appears.
+
+| # | Covers | Why the design missed it |
+|---|---|---|
+| R9 | The trail is taken back **between** resolvent blocks | F7 says every real block propagates nothing, so no mutation of a real proof produces a block whose trail the next one inherits. Hand-built, over a formula `kissat` reports satisfiable |
+| R10 | A repeated literal in a lemma is not a tautology | P8 and B19 pin the acceptance; nothing pinned what the repeat must not be read as. Hand-built, again over a satisfiable formula |
+| R11 | `Reason::RatLemmaIsRup` | The reason code had no fixture at all. Not a safety control — the proof is valid and `drat-trim` verifies the same lemmas — so it is a tripwire on open question 2 rather than on a bad certificate |
+| P12 | `check_rat`'s tautology exit | `taut_lemma`'s tautology carries a RUP hint, so it goes down `check_rup`; the RAT step's own tautology exit had no coverage, and deleting its `unwind` left all 77 tests green |
+| B22 | `max_line_bytes` | See the parser bounds above |
+| — | `assignments == assignments_undone` on every positive fixture | B13, which asserted it, is pure RUP and walks none of the RAT step's unwind paths |
 
 ### CLI-level
 

@@ -30,7 +30,12 @@ to commit, most recently:
 | the same family, n=25 | 257 KB | `s VERIFIED` | `s VERIFIED` |
 
 Reproduce it with `tools/differential.sh`; it needs `kissat` and `drat-trim`,
-which CI does not have.
+which CI does not have. **The pigeonhole and random rows reproduce from this
+repository alone. The two van der Waerden rows do not** — their formulas are
+built by a generator in another of the author's repositories and passed in with
+`tools/differential.sh --extra <dir>`, which is how they are checked without
+this repository depending on that one. Without that directory the harness runs
+the rows above them and nothing else.
 
 **What is still not checked.** Binary proofs. `kissat` writes binary DRAT unless
 told `--no-binary`, and handing one to a text checker is a common mistake, so it
@@ -139,18 +144,29 @@ cargo build --release
 cargo test
 ```
 
-74 tests: 12 proofs that must verify, 21 corruption controls that must not, 25
+79 tests: 13 proofs that must verify, 24 corruption controls that must not, 26
 boundary cases, 12 on the command line contract, 4 on the trust boundary.
 
-Every corruption control was written and run before the rule that catches it
-existed, and observed failing there. Milestone 1's were run against a `check()`
-that returned `Verified` unconditionally; milestone 1b's were run against the
-milestone-1 checker, which reported `s UNSUPPORTED` where a rejection was
-required. The failing output is in the commit that introduced them. A rejection
-test that has never been seen red proves nothing — and neither does a test that
-passes with the defect it describes, which is why the trail's unwinding is
-asserted by counting rather than by a stopwatch, and why the escaping test runs
-a fixture carrying real escape bytes.
+**N1–N12 and R1–R8 were written and run before the rule that catches them
+existed, and observed failing there.** Milestone 1's were run against a
+`check()` that returned `Verified` unconditionally; milestone 1b's were run
+against the milestone-1 checker, which reported `s UNSUPPORTED` where a
+rejection was required. The failing output is in the commit that introduced
+them.
+
+**The tests added after that point cannot claim it, and do not.** R9–R11, P12,
+B22, the binary-proof mapping guard, the assertion that a pure-RUP proof never
+scans for candidates, and the strengthened counter assertions were all written
+against code that already worked. Each is justified by a weaker piece of
+evidence instead, and by a specific one: the line of the rule it covers was
+reverted, the suite was run, and the failing output is quoted in the commit that
+added the test. A test that has never been seen red proves nothing, and saying
+which kind of red it was seen in is the difference between evidence and a
+slogan.
+
+Neither does a test that passes with the defect it describes, which is why the
+trail's unwinding is asserted by counting rather than by a stopwatch, and why
+the escaping test runs a fixture carrying real escape bytes.
 
 Minimum supported Rust is 1.74.0, and CI runs the whole suite on it, so that is
 a measured claim rather than a hopeful one. Linters are pinned to 1.97.1.
