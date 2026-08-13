@@ -116,13 +116,16 @@ cargo build --release
 cargo test
 ```
 
-42 tests: 6 proofs that must verify, 12 corruption controls that must not, 14
-boundary cases, 7 on the command line contract, 3 on the trust boundary.
+53 tests: 8 proofs that must verify, 12 corruption controls that must not, 19
+boundary cases, 10 on the command line contract, 4 on the trust boundary.
 
 Every corruption control was written and run against a `check()` that returned
 `Verified` unconditionally, and observed failing, before the checking code
 existed. The failing output is in the commit that introduced them. A rejection
-test that has never been seen red proves nothing.
+test that has never been seen red proves nothing — and neither does a test that
+passes with the defect it describes, which is why the trail's unwinding is
+asserted by counting rather than by a stopwatch, and why the escaping test runs
+a fixture carrying real escape bytes.
 
 Minimum supported Rust is 1.74.0, and CI runs the whole suite on it, so that is
 a measured claim rather than a hopeful one. Linters are pinned to 1.97.1.
