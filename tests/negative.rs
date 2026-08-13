@@ -30,13 +30,17 @@
 
 mod common;
 
-use refute::{Reason, Verdict};
+use refute::{Lit, Reason, Rejection, Verdict};
 
-fn rejection_reason(cnf: &str, proof: &str) -> Reason {
+fn rejection(cnf: &str, proof: &str) -> Rejection {
     match common::verdict(cnf, proof) {
-        Verdict::NotVerified(rejection) => rejection.reason,
+        Verdict::NotVerified(rejection) => rejection,
         other => panic!("expected a rejection, got {other:?}"),
     }
+}
+
+fn rejection_reason(cnf: &str, proof: &str) -> Reason {
+    rejection(cnf, proof).reason
 }
 
 /// Asserts the safety property itself, independently of the reason: nothing on
@@ -234,6 +238,26 @@ fn assert_rejected(cnf: &str, proof: &str) {
     );
 }
 
+/// Asserts the rule that caught it, and where.
+///
+/// The reason is the tripwire, not the safety property, and on the R series it
+/// earns its keep twice over. Relaxing the rule that a block must name an
+/// uncovered candidate — letting it name any live clause — leaves every one of
+/// these fixtures rejected, by a different rule, and only this assertion
+/// notices: measured, by making that change and running the suite.
+fn assert_caught_by(cnf: &str, proof: &str, step: u64, line: u64, resolvent: u64, reason: &Reason) {
+    assert_rejected(cnf, proof);
+    let rejection = rejection(cnf, proof);
+    assert_eq!(&rejection.reason, reason, "caught by a different rule");
+    assert_eq!(rejection.step, Some(step), "the wrong step");
+    assert_eq!(rejection.line, line, "the wrong proof line");
+    assert_eq!(
+        rejection.resolvent,
+        Some(resolvent),
+        "the wrong resolvent block"
+    );
+}
+
 /// R1. The wrong pivot: the first two literals of a RAT lemma swapped.
 ///
 /// The pivot is the lemma's first literal *as written in the file*, and
@@ -243,7 +267,16 @@ fn assert_rejected(cnf: &str, proof: &str) {
 /// the two it did.
 #[test]
 fn r1_wrong_pivot() {
-    assert_rejected("r01_wrong_pivot.cnf", "r01_wrong_pivot.lrat");
+    assert_caught_by(
+        "r01_wrong_pivot.cnf",
+        "r01_wrong_pivot.lrat",
+        48,
+        4,
+        46,
+        &Reason::NotAResolutionCandidate {
+            pivot: Lit::new(-5).unwrap(),
+        },
+    );
 }
 
 /// R2. The last resolvent block, and its hints, deleted.
@@ -254,7 +287,16 @@ fn r1_wrong_pivot() {
 /// the deletion of *any* real block, and this mutation would be undetectable.
 #[test]
 fn r2_resolvent_block_dropped() {
-    assert_rejected("r02_block_dropped.cnf", "r02_block_dropped.lrat");
+    assert_caught_by(
+        "r02_block_dropped.cnf",
+        "r02_block_dropped.lrat",
+        48,
+        4,
+        47,
+        &Reason::MissingResolvent {
+            pivot: Lit::new(-21).unwrap(),
+        },
+    );
 }
 
 /// R3. A resolvent block redirected to a clause deleted earlier in the proof.
@@ -264,9 +306,15 @@ fn r2_resolvent_block_dropped() {
 /// producing this proof.
 #[test]
 fn r3_block_names_a_deleted_clause() {
-    assert_rejected(
+    assert_caught_by(
         "r03_block_names_deleted_clause.cnf",
         "r03_block_names_deleted_clause.lrat",
+        49,
+        6,
+        6,
+        &Reason::NotAResolutionCandidate {
+            pivot: Lit::new(-21).unwrap(),
+        },
     );
 }
 
@@ -274,18 +322,26 @@ fn r3_block_names_a_deleted_clause() {
 /// block hints are ever walked.
 #[test]
 fn r4_block_hint_redirected() {
-    assert_rejected(
+    assert_caught_by(
         "r04_block_hint_redirected.cnf",
         "r04_block_hint_redirected.lrat",
+        7,
+        1,
+        1,
+        &Reason::HintSatisfied(5),
     );
 }
 
 /// R4b. The same block's conflict hint dropped, so its walk runs out.
 #[test]
 fn r4b_block_conflict_hint_dropped() {
-    assert_rejected(
+    assert_caught_by(
         "r04b_block_conflict_hint_dropped.cnf",
         "r04b_block_conflict_hint_dropped.lrat",
+        7,
+        1,
+        1,
+        &Reason::NoConflict,
     );
 }
 
@@ -299,16 +355,31 @@ fn r4b_block_conflict_hint_dropped() {
 /// claim is checked rather than believed.
 #[test]
 fn r5_empty_hints_with_candidates() {
-    assert_rejected(
+    assert_caught_by(
         "r05_empty_hints_with_candidates.cnf",
         "r05_empty_hints_with_candidates.lrat",
+        46,
+        2,
+        3,
+        &Reason::MissingResolvent {
+            pivot: Lit::new(-9).unwrap(),
+        },
     );
 }
 
 /// R6. An extra resolvent block naming a live clause that is not a candidate.
 #[test]
 fn r6_extra_block() {
-    assert_rejected("r06_extra_block.cnf", "r06_extra_block.lrat");
+    assert_caught_by(
+        "r06_extra_block.cnf",
+        "r06_extra_block.lrat",
+        48,
+        4,
+        1,
+        &Reason::NotAResolutionCandidate {
+            pivot: Lit::new(-21).unwrap(),
+        },
+    );
 }
 
 /// R7. A hint appended to a block whose resolvent its own negation already
@@ -316,7 +387,14 @@ fn r6_extra_block() {
 /// does it — the same argument as `EarlyConflict` in milestone 1.
 #[test]
 fn r7_padded_block() {
-    assert_rejected("r07_padded_block.cnf", "r07_padded_block.lrat");
+    assert_caught_by(
+        "r07_padded_block.cnf",
+        "r07_padded_block.lrat",
+        48,
+        4,
+        47,
+        &Reason::ResolventFalsifiedEarly,
+    );
 }
 
 /// R8. An empty lemma with a RAT-shaped hint list, `46 0 -1 0`.
@@ -326,4 +404,12 @@ fn r7_padded_block() {
 #[test]
 fn r8_rat_without_pivot() {
     assert_rejected("r08_rat_without_pivot.cnf", "r08_rat_without_pivot.lrat");
+    assert_eq!(
+        rejection_reason("r08_rat_without_pivot.cnf", "r08_rat_without_pivot.lrat"),
+        Reason::RatWithoutPivot
+    );
+    assert_eq!(
+        rejection_reason("n12_bare_empty_clause.cnf", "n12_bare_empty_clause.lrat"),
+        Reason::RatWithoutPivot
+    );
 }

@@ -85,6 +85,7 @@ fn b1_empty_proof_file() {
         Verdict::NotVerified(refute::Rejection {
             step: None,
             line: 0,
+            resolvent: None,
             reason: Reason::NoEmptyClause,
         })
     );

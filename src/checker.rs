@@ -5,13 +5,13 @@
 //! hints, checking a step is a bounded walk over a list, and the soundness
 //! argument fits in a paragraph.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::BufRead;
 
 use crate::cnf::{parse_dimacs, Cnf, Warning};
 use crate::limits::Limits;
 use crate::lit::{Clause, ClauseId, Lit};
-use crate::lrat::{Hints, LratReader, Step};
+use crate::lrat::{Hints, LratReader, ResolventBlock, Step};
 use crate::parse::ParseErrorKind;
 use crate::verdict::{Reason, Rejection, Unsupported, Verdict};
 
@@ -49,6 +49,35 @@ pub struct Stats {
     /// all. `b13_large_formula_unwinds_in_proportion_to_assignments` asserts
     /// both directions.
     pub assignments_undone: u64,
+    /// Additions carrying at least one resolvent block.
+    pub rat_additions: u64,
+    /// Additions with no hints at all: a claim that the pivot has no
+    /// resolution candidate, which the checker then establishes for itself.
+    pub vacuous_rat_additions: u64,
+    /// Resolvent blocks checked.
+    pub resolvent_blocks: u64,
+    /// Additions that scanned the clause database for resolution candidates.
+    ///
+    /// Equal to `rat_additions + vacuous_rat_additions` on every proof in the
+    /// corpus, and asserted so on every positive fixture. That equality is
+    /// what catches a checker that scans on every addition, and — the one that
+    /// matters — a checker that forgets to scan on the vacuous ones, which is
+    /// the largest false-accept hole in this milestone.
+    ///
+    /// The one construct that would break it is a *tautological* RAT lemma,
+    /// which is accepted before the scan by the same permissive rule
+    /// milestone 1 applies to every addition. No solver emits one, and no
+    /// measured file contains one.
+    pub candidate_scans: u64,
+    /// Clauses visited by those scans.
+    ///
+    /// The one performance bet in the design, made countable. See
+    /// `Checker::resolution_candidates`: if this ever exceeds the hint literal
+    /// visits on a real proof, the occurrence index is worth building.
+    pub candidates_examined: u64,
+    /// Resolution candidates those scans found. Equal to `resolvent_blocks` on
+    /// a proof that verifies, because the blocks must name the set exactly.
+    pub resolution_candidates: u64,
     /// Slots in the assignment vector, one per variable it can hold.
     ///
     /// Sized from the largest variable the formula actually mentions and grown
@@ -91,6 +120,7 @@ pub fn check_readers<F: BufRead, P: BufRead>(formula: F, proof: P, limits: &Limi
                 verdict: Verdict::NotVerified(Rejection {
                     step: None,
                     line: 0,
+                    resolvent: None,
                     reason: Reason::Parse(err),
                 }),
                 warnings: Vec::new(),
@@ -140,6 +170,30 @@ fn normalize(lits: &[Lit]) -> Clause {
     literals.sort_unstable();
     literals.dedup();
     literals.into_boxed_slice()
+}
+
+/// A refusal on its way out of a step check: the reason, and the resolvent
+/// block it happened inside, if any.
+struct Refusal {
+    reason: Reason,
+    resolvent: Option<ClauseId>,
+}
+
+impl Refusal {
+    fn new(reason: Reason) -> Self {
+        Self {
+            reason,
+            resolvent: None,
+        }
+    }
+
+    /// A refusal that happened while checking the resolvent with `clause`.
+    fn at(reason: Reason, clause: ClauseId) -> Self {
+        Self {
+            reason,
+            resolvent: Some(clause),
+        }
+    }
 }
 
 struct Checker {
@@ -205,6 +259,7 @@ impl Checker {
                     return Verdict::NotVerified(Rejection {
                         step: None,
                         line: 0,
+                        resolvent: None,
                         reason: Reason::Parse(err),
                     });
                 }
@@ -239,26 +294,38 @@ impl Checker {
         Verdict::NotVerified(Rejection {
             step: None,
             line: 0,
+            resolvent: None,
             reason: Reason::NoEmptyClause,
         })
     }
 
     /// Returns `Some` when the run is over, `None` to continue.
     fn add(&mut self, id: ClauseId, lits: Vec<Lit>, hints: Hints, line: u64) -> Option<Verdict> {
-        // Classified before anything else, and before RUP is attempted on it:
-        // running RUP on a lemma whose hints we do not understand would reject
-        // a valid proof, and accepting it would accept anything.
-        let hints = match hints {
-            Hints::Rat { .. } => return Some(Verdict::Unsupported(Unsupported::RatHints { line })),
-            Hints::Empty => return Some(Verdict::Unsupported(Unsupported::EmptyHints { line })),
-            Hints::Rup(hints) => hints,
-        };
+        // Classified before anything else and before any checking, because
+        // running RUP on a RAT lemma rejects a valid proof and taking a RAT
+        // lemma on trust accepts anything.
+        //
+        // The counters are bumped here rather than beside the scan they
+        // predict, so that `candidate_scans == rat_additions +
+        // vacuous_rat_additions` is evidence about the checker rather than an
+        // identity it satisfies by construction.
+        match &hints {
+            Hints::Rat { .. } => {
+                self.stats.rat_additions = self.stats.rat_additions.saturating_add(1);
+            }
+            Hints::Empty => {
+                self.stats.vacuous_rat_additions =
+                    self.stats.vacuous_rat_additions.saturating_add(1);
+            }
+            Hints::Rup(_) => {}
+        }
 
-        let reject = |reason: Reason| {
+        let reject = |refusal: Refusal| {
             Some(Verdict::NotVerified(Rejection {
                 step: Some(id),
                 line,
-                reason,
+                resolvent: refusal.resolvent,
+                reason: refusal.reason,
             }))
         };
 
@@ -271,15 +338,23 @@ impl Checker {
         // rejection reason no input can produce is decoration, and this one
         // was: `Reason::DuplicateId` was removed with the check.
         if id <= self.last_added_id {
-            return reject(Reason::NonMonotonicId {
+            return reject(Refusal::new(Reason::NonMonotonicId {
                 got: id,
                 previous: self.last_added_id,
-            });
+            }));
         }
         self.stats.additions = self.stats.additions.saturating_add(1);
 
-        if let Err(reason) = self.check_rup(&lits, &hints) {
-            return reject(reason);
+        // The vacuous case is the general case with nothing in it. Giving it
+        // its own code path is how the two drift, and the direction they drift
+        // in is "accept the empty hint list", which accepts everything.
+        let checked = match &hints {
+            Hints::Rup(hints) => self.check_rup(&lits, hints),
+            Hints::Rat { prefix, blocks } => self.check_rat(&lits, prefix, blocks),
+            Hints::Empty => self.check_rat(&lits, &[], &[]),
+        };
+        if let Err(refusal) = checked {
+            return reject(refusal);
         }
 
         self.last_added_id = id;
@@ -382,7 +457,7 @@ impl Checker {
     }
 
     /// The step check, exactly as specified in `docs/TDD.md`.
-    fn check_rup(&mut self, lits: &[Lit], hints: &[ClauseId]) -> Result<(), Reason> {
+    fn check_rup(&mut self, lits: &[Lit], hints: &[ClauseId]) -> Result<(), Refusal> {
         let mark = self.trail.len();
         if self.assume_negated(lits) {
             self.unwind(mark);
@@ -392,9 +467,184 @@ impl Checker {
         self.unwind(mark);
         match walked {
             Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(Reason::NoConflict),
-            Err(reason) => Err(reason),
+            Ok(None) => Err(Refusal::new(Reason::NoConflict)),
+            Err(reason) => Err(Refusal::new(reason)),
         }
+    }
+
+    /// Every live clause holding the negated pivot.
+    ///
+    /// The one place that knows how the candidate set is found, and the one
+    /// thing swapped out if the bet below ever loses. Option B was an
+    /// occurrence index, `Lit -> [ClauseId]`, maintained on every insert and
+    /// lazily on every delete; measured against the propagation the checker
+    /// already does for its hints, it costs three times this scan on the two
+    /// largest real proofs, because `drat-trim` deletes hard enough that the
+    /// live database peaks at 1,354 clauses on a 4.1 MB proof while the index
+    /// has to be maintained for every one of the quarter of a million clauses
+    /// that ever exists.
+    ///
+    /// It is a bet on that deletion behaviour, so it is countable rather than
+    /// argued: `candidates_examined` is reported by `--stats` on any real
+    /// proof, and the trigger is written down — if it ever exceeds the hint
+    /// literal visits on a real proof, build the index.
+    ///
+    /// Sorted, so that `MissingResolvent` names the same clause on every run.
+    /// The database is a `HashMap`, whose iteration order is not.
+    fn resolution_candidates(&mut self, pivot: Lit) -> BTreeSet<ClauseId> {
+        let wanted = pivot.negate();
+        self.stats.candidate_scans = self.stats.candidate_scans.saturating_add(1);
+        self.stats.candidates_examined = self
+            .stats
+            .candidates_examined
+            .saturating_add(u64::try_from(self.db.len()).unwrap_or(u64::MAX));
+        let found: BTreeSet<ClauseId> = self
+            .db
+            .iter()
+            .filter(|(_, clause)| clause.contains(&wanted))
+            .map(|(id, _)| *id)
+            .collect();
+        self.stats.resolution_candidates = self
+            .stats
+            .resolution_candidates
+            .saturating_add(u64::try_from(found.len()).unwrap_or(u64::MAX));
+        found
+    }
+
+    /// The RAT step, exactly as specified in `docs/TDD.md` part 2.
+    ///
+    /// A clause `C` is RAT on a pivot `p` in `C` with respect to `F` when, for
+    /// every clause `D` in `F` holding `-p`, the resolvent `C or (D \ {-p})`
+    /// follows from `F` by unit propagation. Adding such a clause preserves
+    /// satisfiability, so if `F + C` is unsatisfiable then `F` is.
+    ///
+    /// Three places a checker can lose that argument, and what happens here:
+    ///
+    /// 1. **The candidate set must be complete.** Miss one clause holding `-p`
+    ///    and the condition was never checked, so an arbitrary clause is added
+    ///    on evidence that looks fine. The set is therefore computed from this
+    ///    checker's own database; the file's blocks may only ever *satisfy* it.
+    /// 2. **The vacuous case must be proved, not assumed.** `205 57 -29 0 0`
+    ///    is a valid lemma whose pivot has no candidate, and accepting it
+    ///    because the hint list is empty is a checker that accepts anything.
+    ///    It goes down this same path with an empty prefix and no blocks, and
+    ///    is accepted only after the scan has returned nothing.
+    /// 3. **`F` is the live database.** A superset of an unsatisfiable set is
+    ///    unsatisfiable, so a step checked against the smaller formula still
+    ///    refutes the larger one: a clause deleted earlier needs no block, and
+    ///    demanding one would be a false rejection.
+    fn check_rat(
+        &mut self,
+        lits: &[Lit],
+        prefix: &[ClauseId],
+        blocks: &[ResolventBlock],
+    ) -> Result<(), Refusal> {
+        let mark = self.trail.len();
+        if self.assume_negated(lits) {
+            self.unwind(mark);
+            return Ok(());
+        }
+        // The pivot is the first literal *as written in the file*. `normalize`
+        // sorts on the way into the database, and sorting changes which
+        // literal is first: `46 21 -9 0 0` begins `-9` once sorted, and a
+        // checker taking the pivot from there scans for the wrong literal and
+        // rejects the smallest real RAT proof there is.
+        let pivot = match lits.first() {
+            Some(pivot) => *pivot,
+            None => {
+                self.unwind(mark);
+                return Err(Refusal::new(Reason::RatWithoutPivot));
+            }
+        };
+
+        match self.walk(prefix) {
+            Err(reason) => {
+                self.unwind(mark);
+                return Err(Refusal::new(reason));
+            }
+            Ok(Some(hint)) => {
+                self.unwind(mark);
+                return Err(Refusal::new(Reason::RatLemmaIsRup(hint)));
+            }
+            Ok(None) => {}
+        }
+
+        // Every block starts from here: the negated lemma *and* the prefix's
+        // propagations. Dropping the prefix reads perfectly well and fails
+        // every RAT line in every real proof measured.
+        let base = self.trail.len();
+        let mut remaining = self.resolution_candidates(pivot);
+
+        for block in blocks {
+            self.stats.resolvent_blocks = self.stats.resolvent_blocks.saturating_add(1);
+            let clause = match self.db.get(&block.clause) {
+                Some(clause) if remaining.contains(&block.clause) => clause.clone(),
+                // Not live, not a candidate, or already covered by an earlier
+                // block. Ignoring it instead would hide a deleted clause, a
+                // wrong pivot and a duplicate in one.
+                _ => {
+                    self.unwind(mark);
+                    return Err(Refusal::at(
+                        Reason::NotAResolutionCandidate { pivot },
+                        block.clause,
+                    ));
+                }
+            };
+            remaining.remove(&block.clause);
+
+            let mut falsified = false;
+            for lit in clause.iter() {
+                if *lit == pivot.negate() {
+                    // Resolved away: it is not part of the resolvent.
+                    continue;
+                }
+                match self.value(*lit) {
+                    // Already true, so negating it conflicts at once: the
+                    // resolvent is refuted by its own negation alone. All 703
+                    // blocks measured for the design are like this.
+                    VAR_TRUE => {
+                        falsified = true;
+                        break;
+                    }
+                    VAR_FALSE => {}
+                    _ => self.assign_true(lit.negate()),
+                }
+            }
+
+            if falsified {
+                if !block.hints.is_empty() {
+                    self.unwind(mark);
+                    return Err(Refusal::at(Reason::ResolventFalsifiedEarly, block.clause));
+                }
+            } else {
+                match self.walk(&block.hints) {
+                    Err(reason) => {
+                        self.unwind(mark);
+                        return Err(Refusal::at(reason, block.clause));
+                    }
+                    Ok(None) => {
+                        self.unwind(mark);
+                        return Err(Refusal::at(Reason::NoConflict, block.clause));
+                    }
+                    Ok(Some(_)) => {}
+                }
+            }
+            self.unwind(base);
+        }
+
+        // The blocks must name the candidate set exactly. Skipping candidates
+        // whose resolvent is trivially refuted would be cheaper and would
+        // accept the deletion of any real block, since every real block is
+        // exactly that — which is the one mutation this milestone exists to
+        // catch.
+        if let Some(uncovered) = remaining.iter().next() {
+            let uncovered = *uncovered;
+            self.unwind(mark);
+            return Err(Refusal::at(Reason::MissingResolvent { pivot }, uncovered));
+        }
+
+        self.unwind(mark);
+        Ok(())
     }
 
     fn value(&self, lit: Lit) -> u8 {

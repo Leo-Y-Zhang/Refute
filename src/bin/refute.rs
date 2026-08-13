@@ -117,6 +117,20 @@ fn run() -> u8 {
             counters.assignments_undone,
             counters.assignment_slots
         );
+        // The second line is the RAT side, and `candidates examined` is on it
+        // deliberately: the candidate scan is the one performance bet in the
+        // design, and this is what makes it observable on a reader's own proof
+        // instead of re-argued from the design's measurements.
+        eprintln!(
+            "refute: {} RAT additions, {} vacuous, {} resolvent blocks, \
+             {} candidate scans, {} candidates examined, {} candidates found",
+            counters.rat_additions,
+            counters.vacuous_rat_additions,
+            counters.resolvent_blocks,
+            counters.candidate_scans,
+            counters.candidates_examined,
+            counters.resolution_candidates
+        );
     }
 
     // One match, no wildcard arm: a new verdict variant must be handled here

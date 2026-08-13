@@ -39,6 +39,17 @@ pub fn verdict(cnf: &str, proof: &str) -> Verdict {
     checked(cnf, proof).0
 }
 
+/// Checks a fixture pair through the library, keeping everything it produced.
+pub fn outcome(cnf: &str, proof: &str) -> refute::Outcome {
+    let formula = File::open(fixture(cnf)).unwrap();
+    let proof = File::open(fixture(proof)).unwrap();
+    refute::check_readers(
+        BufReader::new(formula),
+        BufReader::new(proof),
+        &Limits::default(),
+    )
+}
+
 /// Checks a fixture pair through the library, keeping the formula's warnings.
 pub fn checked(cnf: &str, proof: &str) -> (Verdict, Vec<Warning>) {
     let formula = File::open(fixture(cnf)).unwrap();

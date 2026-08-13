@@ -132,6 +132,45 @@ fn p8_repeated_literal_in_a_lemma_verifies() {
     assert_eq!(outcome.verdict, Verdict::Verified);
 }
 
+/// Every counter below was computed from the fixture bytes by a separate
+/// script, before the checker existed, and matches the table in `docs/TDD.md`
+/// part 2 that the design measured with a throwaway reference checker. They
+/// are predictions confirmed, not readings taken.
+///
+/// The equality asserted here is the one that kills two mutants at once: a
+/// checker that scans the database on every addition, and — the one that
+/// matters — a checker that skips the scan on an addition with no hints, which
+/// is the largest false-accept hole in this milestone.
+fn counters(cnf: &str, proof: &str) -> refute::Stats {
+    let stats = common::outcome(cnf, proof).stats;
+    assert_eq!(
+        stats.candidate_scans,
+        stats
+            .rat_additions
+            .saturating_add(stats.vacuous_rat_additions),
+        "the candidate scan does not happen once per RAT-shaped addition"
+    );
+    stats
+}
+
+/// Asserted on every pure-RUP fixture: no RAT line, so no scan.
+#[test]
+fn the_rup_only_fixtures_never_scan_for_candidates() {
+    for (cnf, proof) in [
+        ("tiny_unsat.cnf", "tiny_unsat.lrat"),
+        ("unit_chain.cnf", "unit_chain.lrat"),
+        ("taut_lemma.cnf", "taut_lemma.lrat"),
+        ("empty_clause_in_cnf.cnf", "empty_clause_in_cnf.lrat"),
+        ("deletes_originals.cnf", "deletes_originals.lrat"),
+        ("random_unsat.cnf", "random_unsat.lrat"),
+        ("dup_literal.cnf", "dup_literal.lrat"),
+    ] {
+        let stats = counters(cnf, proof);
+        assert_eq!(stats.candidate_scans, 0, "{proof} scanned");
+        assert_eq!(stats.resolvent_blocks, 0, "{proof} had a resolvent block");
+    }
+}
+
 /// P9. The flip milestone 1b exists for.
 ///
 /// `real_rat_proof` is pigeonhole 5 into 4, straight out of `kissat` and
@@ -145,6 +184,20 @@ fn p9_real_rat_proof_verifies() {
         Verdict::Verified
     );
     common::cli("real_rat_proof.cnf", "real_rat_proof.lrat").assert("s VERIFIED", 0);
+
+    let stats = counters("real_rat_proof.cnf", "real_rat_proof.lrat");
+    assert_eq!(stats.additions, 80);
+    assert_eq!(stats.rat_additions, 12);
+    assert_eq!(stats.vacuous_rat_additions, 8);
+    assert_eq!(stats.deletions, 61);
+    assert_eq!(stats.hints_resolved, 286);
+    assert_eq!(stats.candidate_scans, 20);
+    assert_eq!(stats.candidates_examined, 886);
+    assert_eq!(stats.resolvent_blocks, 24);
+    // Exactly as many candidates as blocks: the file accounts for the set the
+    // checker found, with nothing left over on either side.
+    assert_eq!(stats.resolution_candidates, 24);
+    assert_eq!(stats.peak_live_clauses, 48);
 }
 
 /// P10. The same construct at scale: pigeonhole 7 into 6. 624 additions, 42
@@ -160,6 +213,18 @@ fn p10_rat_pigeonhole_verifies() {
         Verdict::Verified
     );
     common::cli("rat_pigeonhole.cnf", "rat_pigeonhole.lrat").assert("s VERIFIED", 0);
+
+    let stats = counters("rat_pigeonhole.cnf", "rat_pigeonhole.lrat");
+    assert_eq!(stats.additions, 624);
+    assert_eq!(stats.rat_additions, 42);
+    assert_eq!(stats.vacuous_rat_additions, 30);
+    assert_eq!(stats.deletions, 353);
+    assert_eq!(stats.hints_resolved, 8755);
+    assert_eq!(stats.candidate_scans, 72);
+    assert_eq!(stats.candidates_examined, 8118);
+    assert_eq!(stats.resolvent_blocks, 108);
+    assert_eq!(stats.resolution_candidates, 108);
+    assert_eq!(stats.peak_live_clauses, 137);
 }
 
 /// P11. The one proof whose resolvent block has to propagate.
@@ -175,4 +240,17 @@ fn p11_resolvent_block_hints_propagate() {
         Verdict::Verified
     );
     common::cli("resolvent_propagates.cnf", "resolvent_propagates.lrat").assert("s VERIFIED", 0);
+
+    let stats = counters("resolvent_propagates.cnf", "resolvent_propagates.lrat");
+    assert_eq!(stats.additions, 2);
+    assert_eq!(stats.rat_additions, 1);
+    assert_eq!(stats.vacuous_rat_additions, 0);
+    assert_eq!(stats.candidate_scans, 1);
+    assert_eq!(stats.candidates_examined, 6);
+    assert_eq!(stats.resolvent_blocks, 1);
+    assert_eq!(stats.resolution_candidates, 1);
+    // Seven hint lookups: four on the RUP step that derives the empty clause,
+    // and three inside the one block, whose prefix is empty. Those three are
+    // the coverage no real proof provides.
+    assert_eq!(stats.hints_resolved, 7);
 }
