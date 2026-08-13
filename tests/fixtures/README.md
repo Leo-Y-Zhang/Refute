@@ -16,9 +16,13 @@ not formatting — `b08_crlf` exists specifically to check CRLF handling.
 |---|---|
 | `tiny_unsat` | `kissat --no-binary` then `drat-trim -L`, 3 variables, all 8 clauses |
 | `deletes_originals` | ditto, pigeonhole 4 into 3: 44 additions, 43 deletions, no unsupported construct |
-| `real_rat_proof` | ditto, pigeonhole 5 into 4: contains both an empty hint list and RAT resolvent blocks |
+| `real_rat_proof` | ditto, pigeonhole 5 into 4: 80 additions, 12 with resolvent blocks, 8 with an empty hint list, 24 blocks. The smallest real proof carrying both RAT shapes |
+| `rat_pigeonhole` | ditto, pigeonhole 7 into 6: 624 additions, 42 RAT, 30 empty-hint, 108 blocks, 353 deletions, 55 KB. The same construct at a scale a subtly over-strict checker fails |
 | `random_unsat` | ditto, random 3-SAT just above the threshold: 980 RUP lemmas, 13,351 hints, no unsupported construct. The instance comes from an explicit linear congruential sequence, not Python's `random`, whose internals are not a stability contract across versions |
 | `unit_chain` | hand-built hint lists over a real formula; the same lemma sequence in DRAT form is verified by `drat-trim` during generation |
+| `resolvent_propagates` | hand-built, same discipline: the lemma sequence `1 3 0` / `0` is verified by `drat-trim` in DRAT form during generation, and only the hint lists are the author's. The one fixture whose resolvent block has hints to walk |
+| `b17_binary_proof` | the first 64 bytes of `kissat`'s binary DRAT for pigeonhole 5x4, produced by the same command as the rest with `--no-binary` left off. Its first byte is `a`, 0x61, which is what recognises it |
+| `r01`–`r08` | deterministic mutations of `real_rat_proof` and `resolvent_propagates` by `tools/mutate.py`, one per new rejection rule in milestone 1b. Each choice is "the first one that qualifies, in file order", so a re-run reproduces it and the meaning does not drift when the base proof is regenerated |
 | `taut_lemma` | `deletes_originals` with one tautological lemma spliced in before the last step |
 | `dup_literal` | `tiny_unsat` with the literal its first propagation depends on written twice, and `tiny_unsat`'s proof unchanged. The clause and the literal are found by `tools/mutate.py`, not chosen; `drat-trim` verifies the same lemma sequence in DRAT form against the edited formula during generation |
 | `empty_clause_in_cnf` | hand-built; `drat-trim` reports "trivial UNSAT" and emits an empty LRAT file, so there is nothing to capture |
@@ -27,16 +31,27 @@ not formatting — `b08_crlf` exists specifically to check CRLF handling.
 | `n12`, `b01`–`b11`, `b12b` | constructed by `tools/mutate.py` from the real fixtures |
 | `hostile_escape_formula`, `hostile_escape_proof` | `tiny_unsat` with one token replaced by `ESC [ 1 A ESC [ 2 K s VERIFIED`, once in each file. The bytes are real: `od -c` them before editing either file |
 
-## Two measured facts that shaped the corpus
+## Three measured facts that shaped the corpus
 
 **Every real proof reports its empty hint list before it reaches a RAT block.**
 Measured on pigeonhole 4x3, 5x4, 6x5, 7x6 and 8x7: in each of 5x4 through 8x7
-the first unsupported construct is an empty hint list, on line 2, every time.
-The RAT blocks resolve against exactly those lemmas, so they cannot come first.
-`b12b_rat_hints` therefore carries a single RAT line copied verbatim out of
-`real_rat_proof.lrat`; without it the `RatHints` path is never exercised.
+the first RAT-shaped line is an empty hint list, on line 2, every time. The RAT
+blocks resolve against exactly those lemmas, so they cannot come first. This is
+why milestone 1 always stopped on line 2, and why `b12b_rat_hints` — a single
+RAT line lifted out of `real_rat_proof.lrat` — was the only fixture that ever
+reached the RAT path. It is kept for a better reason now: its blocks name
+lemmas that do not exist when the line stands alone, so it is the control that
+a RAT step is checked against the database it is in.
+
+**No real proof exercises a resolvent block's hint walk.** All 703 blocks
+measured across the eleven proofs behind `docs/TDD.md` part 2 are refuted by the
+negation of their own resolvent and carry no hints at all.
+`resolvent_propagates` is built so that one does: three hints, conflict on the
+last. Without it that path ships with no coverage.
 
 **The 8x7 instance reproduces the design's measurement exactly:** 2,747 RUP
-additions, 70 RAT, 56 empty-hint, 1,459 deletions, ids 205 to 3571. It is not
-committed — 386 KB against a 500 KB corpus budget — but `tools/instances.py`
-will regenerate it if the numbers are ever in doubt.
+additions, 70 RAT, 56 empty-hint, 1,459 deletions, ids 205 to 3571, and 20,069
+clauses examined by the candidate scan. It is not committed — 386 KB against a
+500 KB corpus budget — but `tools/instances.py` regenerates it and
+`tools/differential.sh` runs it against `drat-trim`, which is the gate the
+milestone was held to rather than a CI fixture.

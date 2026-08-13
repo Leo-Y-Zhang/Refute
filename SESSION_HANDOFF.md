@@ -1,27 +1,153 @@
 # Session handoff
 
-**State:** milestone 1 is built, reviewed, green and **on `main`** (4b6bb9e).
-Milestone 1b is in design on branch `design/milestone-1b`: `docs/TDD.md` part 2,
-the PRD's 1b section and the App Flow delta are written. No code has changed.
-
-Build order steps 1 to 10 in `docs/TDD.md` part 1 are done, and the findings from
-the test, security and release reviews that followed are fixed. The suite is 53
-tests: 8 positive, 12 corruption controls, 19 boundary, 10 CLI, 4 trust
-boundary.
+**State:** milestone 1 is on `main` (4b6bb9e). Milestone 1b is **designed on
+`design/milestone-1b` (d7532c6) and built on `feat/milestone-1b`**, which
+branches from it. The suite is 74 tests, green on stable 1.97.1 and on 1.74.0,
+in both profiles; `clippy --all-targets -D warnings` and `cargo fmt --check` are
+clean. Nothing is pushed and nothing is merged.
 
 ## Exact next step
 
-Build order **step 2 of `docs/TDD.md` part 2**: extend `tools/instances.py` and
-`tools/gen_fixtures.sh`, generate the new fixtures, commit them.
+**Ask the owner the two questions below, then push the branch and open a PR.**
+Neither question blocks the code — 1b is complete and green without them — but
+question 1 decides whether one more fixture is committed before review, and
+committing it is the answer that cannot be taken back.
 
-It is gated on **part 2 open question 1** — whether a 49 KB vdW certificate
-derived from the author's `MathRecords` work belongs in the committed corpus, or
-whether every vdW check stays in the local differential harness. That answer is
-the owner's; everything after it is mechanical.
+## The two questions
+
+1. **Does a real van der Waerden certificate belong in the committed corpus?**
+   TDD part 2, open question 1. `vdw_rung` would be about 49 KB of CNF and LRAT
+   derived from the author's `MathRecords` work, and would put a real
+   certificate of a published term under CI on every commit — which is the whole
+   point of the project. It also couples two repositories' artefacts.
+   **It was not committed.** Every vdW check in this milestone is in the
+   differential harness, which is local and runs nothing in CI. The formula is
+   regenerated from `MathRecords/vdw/vdw4.py` in seconds, so saying yes later
+   costs nothing; saying no after it is committed costs a history rewrite.
+2. **Is a RAT step whose hint prefix already conflicts a rejection?** TDD part 2,
+   open question 2. Built strict, as specified, on milestone 1's `EarlyConflict`
+   reasoning. It is the one new rule with a plausible false-rejection risk
+   against a producer other than `drat-trim`, it never fires on any real file
+   measured, and it has its own reason code (`RatLemmaIsRup`) so relaxing it is
+   one branch.
+
+## What was built
+
+Build order steps 2 to 11 of `docs/TDD.md` part 2, in that order, one commit
+each. Step 12 — push and CI — is not done.
+
+- **Fixtures first** (c850d45): `rat_pigeonhole` (pigeonhole 7x6, 55,003 bytes),
+  `resolvent_propagates`, `b17_binary_proof`, and `r01`–`r08`. The corpus is
+  208 KB of a 500 KB budget. Re-running the generator left every milestone-1
+  fixture byte-identical.
+- **Tests red** (73c970b): 72 tests, 22 failing, none of them a compile error.
+  The failing output is in the commit message.
+- **Parser** (6583562), **hint walk factored out** (cac0198), **the RAT step**
+  (c44bca4), then the harness and the documents.
+
+## Verified on this machine
+
+- `cargo test --no-fail-fast` — 74 passed, 0 failed, on stable 1.97.1
+- the same on **1.74.0** — 74 passed, so `rust-version` stays measured
+- the same with `--release` — 74 passed
+- `cargo clippy --all-targets -- -D warnings` — clean
+- `cargo fmt --all --check` — clean
+- **`tools/differential.sh`**, the gate the TDD makes the README conditional on:
+
+| instance | LRAT | `drat-trim` | `refute` | agree |
+|---|---:|---|---|---|
+| pigeonhole 4x3 | 1,378 | `s VERIFIED` | `s VERIFIED` | yes |
+| pigeonhole 5x4 | 3,167 | `s VERIFIED` | `s VERIFIED` | yes |
+| pigeonhole 6x5 | 10,089 | `s VERIFIED` | `s VERIFIED` | yes |
+| pigeonhole 7x6 | 55,003 | `s VERIFIED` | `s VERIFIED` | yes |
+| **pigeonhole 8x7** | 386,428 | `s VERIFIED` | `s VERIFIED` | yes |
+| random 3-SAT x 3 | 7,263 to 96,979 | `s VERIFIED` | `s VERIFIED` | yes |
+| **A217058 rung, n=21 j=1** | 41,722 | `s VERIFIED` | `s VERIFIED` | yes |
+| **A217058 rung, n=25 j=2** | 257,330 | `s VERIFIED` | `s VERIFIED` | yes |
+
+  The last two are real certificates of the author's published work, built from
+  `MathRecords/vdw/vdw4.py` with symmetry breaking off and passed in with
+  `--extra`, so this repository still depends on nothing outside itself.
+
+- The release binary on pigeonhole 8x7, which is the milestone's own gate:
+
+      refute: 2873 additions, 1459 deletions, 63901 hints resolved, 294 peak
+      live clauses, 0 unknown deletions, 81606 assignments, 81606 undone
+      refute: 70 RAT additions, 56 vacuous, 196 resolvent blocks, 126 candidate
+      scans, 20069 candidates examined, 196 candidates found
+      s VERIFIED
+
+  20,069 clauses examined is the number the design's occurrence-tracking table
+  predicted for the scan it chose over an index, to the unit.
+
+## What the build proved that the design could only argue
+
+Two experiments, run on the finished tree and then reverted. Both are in
+c44bca4's message with their real output.
+
+1. **Remove the rule that every candidate must be covered**, and
+   `r02_block_dropped` and `r05_empty_hints_with_candidates` print
+   `s VERIFIED`. A corrupted certificate verifying. That is what the rule is
+   for.
+2. **Let a block name any live clause** instead of an uncovered candidate, and
+   every R fixture is *still* rejected — by a different rule. The bare "is it
+   rejected" assertions do not notice; the exact-reason assertions do. That is
+   why the R series names its rule, step, line and resolvent block.
+
+## Deviations from the written build order, and why
+
+- **`vdw_rung` is not committed.** Question 1 above. It is TDD P10.
+- **Test numbers moved.** The TDD's P8–P11 are P9–P11 here, because a P8 already
+  existed; its B14–B18 are B17–B21, because B14–B16 already existed.
+- **B21 asserts a parse error**, where the TDD's boundary row asks for
+  `NotAResolutionCandidate` on a block naming clause 0. A block naming clause 0
+  has to be written `-0`, which scans as zero rather than as a negative and is
+  rejected as a hint identifier. The TDD says both things in different rows; the
+  parse error is the one the grammar produces, and asserting the other would be
+  asserting something untrue.
+- **R3 lands at step 49, proof line 6, resolvent 6**, not the design's 65/32/34.
+  The mutation picks the first RAT line following any deletion; the reference
+  implementation picked a different one. Same rule, deterministic either way.
+- **`resolution_candidates` takes `&mut self`**, not the `&self` in the TDD's
+  interface list, because it counts. Counting inside the function is what keeps
+  `candidates_examined` meaningful if the occurrence index ever replaces it.
+- **The binary sniff reads the first byte of the file**, not of the first
+  non-empty line, and does it before UTF-8 decoding. A binary proof need not
+  decode, and a failed decode is reported as an I/O error. The narrowing can
+  only fail to recognise a binary proof; it has no route to `Verified`.
+- **No commit was left in a state that prints `s VERIFIED` on a bad proof.**
+  Experiment 1 above was run and reverted rather than committed red, which is a
+  departure from part 1's practice of committing the red. The output is
+  recorded in the commit message instead.
+
+## Not verified
+
+- **CI.** The branch is not pushed, so no run exists. Build order step 12.
+- **The 200 MB rung.** Largest artefact checked end to end is 386 KB, and the
+  largest verified anywhere in this session is the 257 KB vdW rung. Milestone 3
+  owns scale.
+- **Any producer of LRAT other than `drat-trim`.** Two of the new rules are
+  strict on shapes only `drat-trim`'s behaviour has been measured against; that
+  is question 2.
+- A local ref, `backup/pre-filter-branch`, still points at the pre-rewrite
+  history and still contains the `.pyc` described in the milestone-1 record. It
+  is local only and was never pushed. Delete it with
+  `git branch -D backup/pre-filter-branch` when the rewrite is trusted.
+
+## Reference binaries
+
+Never named by path in a tracked file. `tools/gen_fixtures.sh` and
+`tools/differential.sh` both read `$KISSAT` and `$DRAT_TRIM`, or take
+`--kissat` / `--drat-trim`. Generated fixtures are committed so CI needs
+neither. `tools/differential.sh --extra <dir>` takes pre-built CNFs, which is
+how a certificate from another repository is checked without this one depending
+on it.
+
+---
 
 The milestone-1 record below is kept as it was written.
 
-## Verified in CI
+## Verified in CI (milestone 1)
 
 The workflow has now run. Run 31729660983 on `9918064`, all five jobs green:
 
@@ -38,19 +164,7 @@ claims (`rustc 1.74.0 (79e9716c9 2023-11-13)` on both MSRV legs) and reported
 19 + 10 + 12 + 8 + 4 passing. The CRLF fixture guard ran on Windows, which is
 the platform that would have quietly rewritten it.
 
-## Verified on this machine
-
-- `cargo test --no-fail-fast` — 53 passed, 0 failed, on stable 1.97.1
-- `cargo test --no-fail-fast` on **1.74.0** — 53 passed, so `rust-version` in
-  `Cargo.toml` is measured. This settles TDD open question 3.
-- `cargo clippy --all-targets -- -D warnings` — clean, with the panic floor
-  now in `Cargo.toml` so the binary and the tests are inside it
-- `cargo fmt --all --check` — clean
-- The release binary on the real `random_unsat` artefact: `s VERIFIED`, exit 0,
-  agreeing with `drat-trim` on the same files
-- Pigeonhole 8x7 from `drat-trim -L`: `s UNSUPPORTED` on proof line 2
-
-## What the reviews found, and what changed
+## What the milestone-1 reviews found, and what changed
 
 Ten fixes, each with its test observed failing first; the commit messages carry
 the real failing output.
@@ -83,49 +197,37 @@ Also: trailing tokens after a deletion are rejected as they are on an addition,
 `Reason::DuplicateId` is gone because monotonicity already forbids what it
 described, and `actions/checkout` is pinned to a commit.
 
-## Not verified
+## Two findings from the milestone-1 build worth carrying forward
 
-- A local ref, `backup/pre-filter-branch`, still points at the pre-rewrite
-  history and so still contains the `.pyc`. It is local only, was never pushed,
-  and the branch that was pushed is clean at every commit. Delete it with
-  `git branch -D backup/pre-filter-branch` when the rewrite is trusted.
-- Behaviour on a proof larger than ~100 KB. The largest artefact checked end to
-  end is 97 KB / 980 lemmas. Milestone 3 is where 200 MB gets tested.
-- Anything about RAT. Milestone 1b.
-
-## Two findings from the build worth carrying forward
-
-1. **B12 as specified in the TDD is not reachable.** It asked for a real
+1. **B12 as specified in the TDD was not reachable.** It asked for a real
    `drat-trim` proof to report `Unsupported(RatHints)`. In every instance
-   measured — pigeonhole 5x4, 6x5, 7x6, 8x7 — the *first* unsupported construct
-   is an empty hint list, on line 2, every time, because the RAT blocks resolve
-   against exactly those lemmas. B12 now asserts what the real file does, and a
-   new fixture `b12b_rat_hints` carries a single RAT line copied verbatim out of
-   a real proof so that the `RatHints` path is exercised at all.
+   measured the *first* unsupported construct was an empty hint list, on line 2,
+   every time, because the RAT blocks resolve against exactly those lemmas.
+   Milestone 1b checks both, so B12 now asserts that the same file verifies.
 
 2. **The design's measurement reproduces exactly.** Pigeonhole 8x7 gave 2,747
    RUP additions, 70 RAT, 56 empty-hint, 1,459 deletions, ids 205 to 3571.
 
-## Open questions still needing the owner
+## Milestone-1 open questions still needing the owner
 
-1. **Ship milestone 1 publicly while most real proofs report `UNSUPPORTED`?**
-   The README is written as though the answer is yes — the limitation is the
-   second thing on the page, with the measured table and the exact output a
-   reader will get. If the answer is no, the change is confined to that section.
+1. ~~**Ship milestone 1 publicly while most real proofs report `UNSUPPORTED`?**~~
+   Answered: ship. The limitation it described is now closed, and the README's
+   opening was rewritten after the differential harness agreed with `drat-trim`,
+   in that order, which is the ordering rule the TDD's rollback section sets.
 2. **`Limits::max_var` default of 2^26** (67M variables). It no longer decides
    an allocation on its own — the assignment vector is sized from the formula —
    so this is now only a ceiling on what a literal may be. Milestone 4 can
    lower it per platform.
 3. **Playground certificate set (milestone 4).** Unchanged from `docs/PRD.md`.
 
-Question 2 in the PRD — the LICENCE copyright line — **was not taken as this
-paragraph used to claim.** It said the line read `Copyright (c) 2026 Refute
-contributors`; `LICENCE` carries the owner's public name, which is what the PRD
-records the owner deciding. The file wins and the paragraph is corrected here.
-Nothing else about the repository's identity has changed: no email, no location,
-no build path, no machine name appears in any tracked file.
+Question 2 in the PRD — the LICENCE copyright line — **was not taken as an
+earlier version of this paragraph claimed.** It said the line read `Copyright
+(c) 2026 Refute contributors`; `LICENCE` carries the owner's public name, which
+is what the PRD records the owner deciding. The file wins. Nothing else about
+the repository's identity has changed: no email, no location, no build path, no
+machine name appears in any tracked file.
 
-## Deviations from the written build order, and why
+## Deviations from the milestone-1 build order, and why
 
 - **The CLI arrived at step 2, not step 8**, reduced to argument handling, file
   opening, exit codes and the verdict strings. Without a binary there is nothing
@@ -140,10 +242,3 @@ no build path, no machine name appears in any tracked file.
   RUP lemmas) because every other positive fixture is tens of steps and a subtly
   over-strict checker passes all of them — which is exactly how the repeated
   literal was found; then `dup_literal` and the two `hostile_escape` pairs.
-
-## Reference binaries
-
-Never named by path in a tracked file. `tools/gen_fixtures.sh` reads `$KISSAT`
-and `$DRAT_TRIM`, or takes `--kissat` / `--drat-trim`. Generated fixtures are
-committed so CI needs neither. A re-run of the generator reproduces the whole
-corpus byte-identically; that was checked, twice, while adding to it.

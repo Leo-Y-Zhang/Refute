@@ -9,31 +9,42 @@ a soundness bug in one is not a soundness bug in both.
 
 ## Read this before using it
 
-**Milestone 1 checks RUP steps with hints. It does not check RAT steps, and most
-real proofs contain them.** On a measured `drat-trim -L` file for pigeonhole 8x7
-— 204 clauses, 2,873 core lemmas — the addition lines break down as:
+**Refute checks every addition line a text `drat-trim -L` file contains.** That
+means RUP steps with hints, RAT steps with resolvent blocks, and the empty hint
+list — which is not an absence but a claim, that the lemma's pivot has no
+resolution candidate, and which Refute accepts only after establishing that for
+itself from its own clause database.
 
-| line kind | count | share |
-|---|---:|---:|
-| RUP, all-positive hints | 2,747 | 96.0 % |
-| RAT resolvent blocks (negative hints) | 70 | 2.4 % |
-| empty hint list | 56 | 2.0 % |
+Milestone 1 checked the RUP steps alone, which on a measured pigeonhole 8x7
+proof was 96 % of addition lines and, in practice, nothing: the first line it
+could not check arrived on line 2 of almost every real file. Milestone 1b closed
+that. The evidence is a differential run against `drat-trim` on proofs too large
+to commit, most recently:
 
-That 4.4 % is not spread evenly. **In every instance measured, 5x4 through 8x7,
-the first construct Refute cannot check is on line 2 of the proof.** Run it on a
-real `drat-trim` file today and you will get:
+| instance | LRAT | `drat-trim` | `refute` |
+|---|---:|---|---|
+| pigeonhole 4x3 to 7x6 | 1.4 KB to 55 KB | `s VERIFIED` | `s VERIFIED` |
+| pigeonhole 8x7 | 386 KB | `s VERIFIED` | `s VERIFIED` |
+| 3 random 3-SAT refutations | 7 KB to 97 KB | `s VERIFIED` | `s VERIFIED` |
+| a mixed van der Waerden certificate, n=21 | 42 KB | `s VERIFIED` | `s VERIFIED` |
+| the same family, n=25 | 257 KB | `s VERIFIED` | `s VERIFIED` |
+
+Reproduce it with `tools/differential.sh`; it needs `kissat` and `drat-trim`,
+which CI does not have.
+
+**What is still not checked.** Binary proofs. `kissat` writes binary DRAT unless
+told `--no-binary`, and handing one to a text checker is a common mistake, so it
+has its own answer rather than a parse error:
 
 ```
-$ refute pigeonhole.cnf pigeonhole.lrat
+$ refute formula.cnf proof.drat
 s UNSUPPORTED
-refute: proof line 2: addition with an empty hint list; milestone 1 checks RUP
-hints only. Use drat-trim for RAT proofs until milestone 1b
+refute: proof line 1: this is a binary proof; refute reads text LRAT.
+Re-run kissat with --no-binary, then drat-trim with -L
 ```
 
-That is the honest state of the tool. RAT hint blocks are milestone 1b and are
-the immediate next piece of work, not a nice-to-have. Until then Refute is a
-complete checker for pure-RUP proofs — random 3-SAT refutations, and any proof
-whose lemmas all carry positive hints — and nothing more.
+Also unchecked, and out of scope here: DRAT itself, backward checking, trimming,
+core extraction, binary LRAT, parallelism.
 
 **`s UNSUPPORTED` is not a pass.** It exits 2. A caller grepping for `VERIFIED`
 would also match `NOT VERIFIED`, so test the exit code, never the string alone.
@@ -67,7 +78,7 @@ directly and removes it entirely.
 |---|---|---|
 | 0 | `s VERIFIED` | A checked sequence of steps derived the empty clause |
 | 1 | `s NOT VERIFIED` | The proof was read and found wanting, or would not parse |
-| 2 | `s UNSUPPORTED` | The proof uses a construct this milestone does not check |
+| 2 | `s UNSUPPORTED` | The proof is binary, not text LRAT. Nothing was checked |
 | 3 | — | Bad arguments, or a file that would not open. Nothing was checked |
 
 3 is deliberately distinct from 1. Conflating "no proof" with "bad proof" hides
@@ -104,6 +115,18 @@ that protects backward checking. Refute checks forward with hints and needs no
 such exception: if a later step needs a deleted unit, its hint lookup fails and
 the proof is rejected. Refute is the stricter of the two here, on purpose.
 
+**A RAT step must name the resolution candidate set exactly**: no live clause
+holding the negated pivot left uncovered, and no block naming anything else.
+Every resolvent block in the 703 measured is refuted by the negation of its own
+resolvent, so a checker that skipped the trivially refuted ones would accept the
+deletion of any real block — which is to say it could not tell a proof from a
+proof with a block removed. Two narrower rules follow the same reasoning as
+milestone 1's `EarlyConflict`, are strict because real output never does the
+thing, and each carries its own reason code so a disagreement with another
+producer is localised in one line: a RAT step whose hint prefix already reaches
+a conflict is rejected, and so are hints on a block that its own negation
+already refutes.
+
 Deletion is otherwise permissive — deleting an identifier that was never added
 is counted under `--stats`, not rejected. Deletion only ever removes tools from
 the checker, so a spurious one can cause a later rejection but can never cause a
@@ -116,12 +139,14 @@ cargo build --release
 cargo test
 ```
 
-53 tests: 8 proofs that must verify, 12 corruption controls that must not, 19
-boundary cases, 10 on the command line contract, 4 on the trust boundary.
+74 tests: 12 proofs that must verify, 21 corruption controls that must not, 25
+boundary cases, 12 on the command line contract, 4 on the trust boundary.
 
-Every corruption control was written and run against a `check()` that returned
-`Verified` unconditionally, and observed failing, before the checking code
-existed. The failing output is in the commit that introduced them. A rejection
+Every corruption control was written and run before the rule that catches it
+existed, and observed failing there. Milestone 1's were run against a `check()`
+that returned `Verified` unconditionally; milestone 1b's were run against the
+milestone-1 checker, which reported `s UNSUPPORTED` where a rejection was
+required. The failing output is in the commit that introduced them. A rejection
 test that has never been seen red proves nothing — and neither does a test that
 passes with the defect it describes, which is why the trail's unwinding is
 asserted by counting rather than by a stopwatch, and why the escaping test runs

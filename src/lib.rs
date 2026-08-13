@@ -5,7 +5,7 @@
 //!
 //! Milestone 1b checks every addition line a text `drat-trim -L` file
 //! contains: RUP steps with hints, RAT steps with resolvent blocks, and the
-//! empty hint list -- which is a claim that the lemma's pivot has no
+//! empty hint list — which is a claim that the lemma's pivot has no
 //! resolution candidate, and is accepted only after this checker has
 //! established that for itself. A binary proof is reported as
 //! [`verdict::Unsupported`], never as verified. See `docs/PRD.md` for the

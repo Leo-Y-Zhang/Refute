@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Runs Refute and drat-trim over the same instances and compares their verdicts.
+#
+# Not CI. CI has neither binary and checks the committed bytes; this is the
+# check that Refute agrees with an independently written implementation on
+# proofs too large to commit -- pigeonhole 8x7 is 386 KB against a 500 KB corpus
+# budget, and a real van der Waerden certificate is larger still.
+#
+# The rollback section of docs/TDD.md part 2 makes this a hard gate: the
+# README's claim about what Refute checks is rewritten only after this has
+# agreed with drat-trim on real proofs, never before.
+#
+# Locations are never written into a tracked file. Point the variables at your
+# own builds:
+#
+#   KISSAT=/path/to/kissat DRAT_TRIM=/path/to/drat-trim tools/differential.sh
+#
+# or pass --kissat / --drat-trim. --extra <dir> adds every .cnf in a directory,
+# so that certificates built elsewhere can be included without this repository
+# depending on another one.
+set -uo pipefail
+
+kissat="${KISSAT:-}"
+drat_trim="${DRAT_TRIM:-}"
+extra=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --kissat) kissat="$2"; shift 2 ;;
+        --drat-trim) drat_trim="$2"; shift 2 ;;
+        --extra) extra="$2"; shift 2 ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+if [ -z "$kissat" ] || [ -z "$drat_trim" ]; then
+    echo "set KISSAT and DRAT_TRIM, or pass --kissat and --drat-trim" >&2
+    exit 2
+fi
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+refute="$root/target/release/refute"
+[ -x "$refute" ] || refute="$refute.exe"
+if [ ! -x "$refute" ]; then
+    echo "build the release binary first: cargo build --release" >&2
+    exit 2
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# The instances, generated here rather than committed. 8x7 is the one the
+# milestone is gated on and the one the corpus cannot afford.
+python3 - "$work" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), ""))
+sys.path.insert(0, os.path.join(os.getcwd(), "tools"))
+from instances import write_cnf, pigeonhole, random_3sat
+out = sys.argv[1]
+for pigeons, holes in [(4, 3), (5, 4), (6, 5), (7, 6), (8, 7)]:
+    write_cnf(os.path.join(out, "pigeonhole_%dx%d.cnf" % (pigeons, holes)),
+              *pigeonhole(pigeons, holes))
+for name, (v, c, seed) in {
+    "random_80_370": (80, 370, 99),
+    "random_60_280": (60, 280, 7),
+    "random_100_460": (100, 460, 4242),
+}.items():
+    write_cnf(os.path.join(out, name + ".cnf"), *random_3sat(v, c, seed))
+PY
+
+if [ -n "$extra" ]; then
+    cp "$extra"/*.cnf "$work"/ || { echo "no .cnf files in $extra" >&2; exit 2; }
+fi
+
+printf '%-22s %6s  %-14s  %-14s  %s\n' instance bytes drat-trim refute agree
+status=0
+for cnf in "$work"/*.cnf; do
+    name="$(basename "$cnf" .cnf)"
+
+    "$kissat" --no-binary -q "$cnf" "$work/$name.drat" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 20 ]; then
+        printf '%-22s %6s  %-14s  %-14s  %s\n' "$name" - "kissat=$rc" - SKIPPED
+        continue
+    fi
+
+    if "$drat_trim" "$cnf" "$work/$name.drat" -L "$work/$name.lrat" \
+        | grep -q '^s VERIFIED'; then
+        theirs="s VERIFIED"
+    else
+        theirs="s NOT VERIFIED"
+    fi
+
+    ours="$("$refute" "$cnf" "$work/$name.lrat" 2>/dev/null | head -1)"
+    size="$(wc -c < "$work/$name.lrat" | tr -d ' ')"
+
+    if [ "$ours" = "$theirs" ]; then
+        agree=yes
+    else
+        agree=NO
+        status=1
+    fi
+    printf '%-22s %6s  %-14s  %-14s  %s\n' "$name" "$size" "$theirs" "$ours" "$agree"
+done
+
+echo
+if [ "$status" -eq 0 ]; then
+    echo "the two checkers agree on every instance"
+else
+    echo "DISAGREEMENT: do not rewrite the README" >&2
+fi
+exit "$status"
