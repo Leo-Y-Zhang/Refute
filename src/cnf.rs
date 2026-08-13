@@ -167,7 +167,10 @@ pub fn parse_dimacs<R: BufRead>(mut reader: R, limits: &Limits) -> Result<Cnf, P
                     found: clauses.len(),
                 });
             }
-            max_var = max_var.max(declared_vars);
+            // `num_vars` is the largest variable the formula uses, and nothing
+            // else. Raising it to a header that overstates would let nineteen
+            // bytes -- `p cnf 4294967295 1` -- choose the checker's allocation,
+            // and the header is advisory everywhere else in this parser.
         }
     }
 

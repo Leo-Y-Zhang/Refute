@@ -349,6 +349,36 @@ fn b15_a_leading_byte_order_mark_is_skipped() {
     assert_eq!(err.line, 2);
 }
 
+/// B16. Nineteen bytes claiming four billion variables.
+///
+/// `p cnf 4294967295 1` is the whole attack. The assignment vector used to be
+/// sized from the header, capped only by `Limits::max_var`, so those nineteen
+/// bytes bought a 64 MB allocation before a single clause was checked — and in
+/// the milestone-4 WASM target that is the heap.
+///
+/// The header is advisory everywhere else in this parser; it is advisory here
+/// too. The vector is sized from the largest variable the formula actually
+/// mentions and grows on demand, which B3 — a header that *understates* the
+/// count — covers from the other side.
+#[test]
+fn b16_the_header_does_not_size_the_assignment_vector() {
+    let outcome = refute::check_readers(
+        Cursor::new("p cnf 4294967295 1\n1 0\n".as_bytes()),
+        Cursor::new(&b""[..]),
+        &Limits::default(),
+    );
+    assert!(
+        matches!(outcome.verdict, Verdict::NotVerified(_)),
+        "{:?}",
+        outcome.verdict
+    );
+    assert!(
+        outcome.stats.assignment_slots <= 8,
+        "a formula mentioning variable 1 bought {} assignment slots",
+        outcome.stats.assignment_slots
+    );
+}
+
 /// B12. A whole real `drat-trim` proof containing RAT blocks.
 ///
 /// It reports the *empty hint list*, not the RAT block, because in every

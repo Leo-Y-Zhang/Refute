@@ -107,14 +107,15 @@ fn run() -> u8 {
         eprintln!(
             "refute: {} additions, {} deletions, {} hints resolved, \
              {} peak live clauses, {} unknown deletions, \
-             {} assignments, {} of them undone",
+             {} assignments, {} of them undone, {} assignment slots",
             counters.additions,
             counters.deletions,
             counters.hints_resolved,
             counters.peak_live_clauses,
             counters.unknown_deletions,
             counters.assignments,
-            counters.assignments_undone
+            counters.assignments_undone,
+            counters.assignment_slots
         );
     }
 

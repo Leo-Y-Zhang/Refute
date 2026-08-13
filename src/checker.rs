@@ -48,6 +48,13 @@ pub struct Stats {
     /// all. `b13_large_formula_unwinds_in_proportion_to_assignments` asserts
     /// both directions.
     pub assignments_undone: u64,
+    /// Slots in the assignment vector, one per variable it can hold.
+    ///
+    /// Sized from the largest variable the formula actually mentions and grown
+    /// on demand after that — never from the count the `p` line declares.
+    /// `p cnf 4294967295 1` is nineteen bytes, and taking its word for it buys
+    /// a 64 MB allocation, capped only by `Limits::max_var`.
+    pub assignment_slots: usize,
 }
 
 /// Everything one run produces.
@@ -107,7 +114,7 @@ pub fn check_with_stats<R: BufRead>(
 ) -> (Verdict, Stats) {
     let mut state = Checker::new(cnf, limits);
     let verdict = state.run(proof);
-    (verdict, state.stats)
+    (verdict, state.stats())
 }
 
 /// Every clause enters the database duplicate-free.
@@ -166,6 +173,14 @@ impl Checker {
             assign: vec![UNSET; size],
             trail: Vec::new(),
             max_var,
+        }
+    }
+
+    /// The counters, with the ones only the checker itself can measure.
+    fn stats(&self) -> Stats {
+        Stats {
+            assignment_slots: self.assign.len(),
+            ..self.stats
         }
     }
 
