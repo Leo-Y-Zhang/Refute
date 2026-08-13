@@ -81,9 +81,12 @@ pub fn parse_dimacs<R: BufRead>(mut reader: R, limits: &Limits) -> Result<Cnf, P
 
     loop {
         buffer.clear();
-        let read = reader
-            .read_line(&mut buffer)
-            .map_err(|err| ParseError::new(Source::Formula, line_no, io_kind(&err)))?;
+        // `line_no` counts the lines already read, so the read that just failed
+        // was of the next one. Reporting it a line early sends a reader to a
+        // line that is fine.
+        let read = reader.read_line(&mut buffer).map_err(|err| {
+            ParseError::new(Source::Formula, line_no.saturating_add(1), io_kind(&err))
+        })?;
         if read == 0 {
             break;
         }

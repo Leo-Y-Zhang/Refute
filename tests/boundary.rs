@@ -51,6 +51,32 @@ fn parse_error(cnf: &str, proof: &str) -> ParseError {
     }
 }
 
+/// A reader that hands over its lines one at a time and then fails.
+///
+/// `BufReader::read_line` refills from the inner reader only when its own
+/// buffer is empty, so one line per `read` puts the failure on a line of the
+/// test's choosing. A disk or a network share failing halfway through a 200 MB
+/// proof is the case being modelled, and it is the case nobody can reproduce
+/// on demand.
+struct FailsAfter {
+    lines: Vec<&'static str>,
+    next: usize,
+}
+
+impl std::io::Read for FailsAfter {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.lines.get(self.next) {
+            Some(line) => {
+                self.next = self.next.saturating_add(1);
+                let bytes = line.as_bytes();
+                buf[..bytes.len()].copy_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            None => Err(std::io::Error::other("the device was disconnected")),
+        }
+    }
+}
+
 /// B1. A proof file of zero bytes. Not a crash, not a pass.
 #[test]
 fn b1_empty_proof_file() {
@@ -232,6 +258,53 @@ fn b11b_tokens_after_a_deletion_terminator_are_rejected() {
     assert_eq!(err.source, Source::Proof);
     assert_eq!(err.kind, ParseErrorKind::TrailingTokens("2".to_owned()));
     assert_eq!(err.line, 1);
+}
+
+/// B14. A read that fails part-way through names the line it failed on.
+///
+/// Four lines are handed over and the fifth read fails, in each file in turn.
+/// The line counter is incremented after a successful read, so the error used
+/// to be reported one line early — a reader sent to line 4 of a file whose
+/// line 4 is fine has been told something false about a 200 MB file.
+#[test]
+fn b14_an_io_error_names_the_line_that_failed() {
+    let formula = std::io::BufReader::new(FailsAfter {
+        lines: vec!["p cnf 2 2\n", "1 2 0\n", "-1 0\n", "1 0\n"],
+        next: 0,
+    });
+    let outcome = refute::check_readers(formula, Cursor::new(&b""[..]), &Limits::default());
+    match outcome.verdict {
+        Verdict::NotVerified(rejection) => match rejection.reason {
+            Reason::Parse(err) => {
+                assert_eq!(err.source, Source::Formula);
+                assert!(matches!(err.kind, ParseErrorKind::Io(_)), "{err:?}");
+                assert_eq!(err.line, 5, "the failing read was of line 5");
+            }
+            other => panic!("expected a parse error, got {other:?}"),
+        },
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+
+    let proof = std::io::BufReader::new(FailsAfter {
+        lines: vec!["3 d 0\n"; 4],
+        next: 0,
+    });
+    let outcome = refute::check_readers(
+        Cursor::new("p cnf 2 2\n1 2 0\n-1 0\n".as_bytes()),
+        proof,
+        &Limits::default(),
+    );
+    match outcome.verdict {
+        Verdict::NotVerified(rejection) => match rejection.reason {
+            Reason::Parse(err) => {
+                assert_eq!(err.source, Source::Proof);
+                assert!(matches!(err.kind, ParseErrorKind::Io(_)), "{err:?}");
+                assert_eq!(err.line, 5, "the failing read was of line 5");
+            }
+            other => panic!("expected a parse error, got {other:?}"),
+        },
+        other => panic!("expected a rejection, got {other:?}"),
+    }
 }
 
 /// B12. A whole real `drat-trim` proof containing RAT blocks.

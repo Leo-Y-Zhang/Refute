@@ -98,6 +98,10 @@ impl<R: BufRead> Iterator for LratReader<R> {
                 }
                 Ok(_) => {}
                 Err(err) => {
+                    // `self.line` counts the lines already yielded, so the
+                    // read that just failed was of the next one. The counter
+                    // moves first, and the error is located on that line.
+                    self.line = self.line.saturating_add(1);
                     let kind = io_kind(&err);
                     return self.fail(kind);
                 }
