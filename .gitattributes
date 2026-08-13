@@ -1,0 +1,8 @@
+# Source and docs are normalised to LF in the repository and checked out as LF
+# on every platform, so rustfmt and CI agree on Windows and Ubuntu.
+* text=auto eol=lf
+
+# Fixtures are byte-exact evidence. Never translate their line endings: boundary
+# case B8 in docs/TDD.md exists precisely to check CRLF handling, and a fixture
+# whose bytes change on checkout cannot test that.
+tests/fixtures/** -text
