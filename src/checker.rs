@@ -251,14 +251,19 @@ impl Checker {
             }))
         };
 
+        // Monotonicity is also what rules out reusing an identifier, so there
+        // is no separate duplicate check. Every key in the database is at most
+        // `last_added_id`: the formula's occupy 1..=n where n is the starting
+        // value, deletion only removes keys, and an addition inserts `id`
+        // immediately after raising `last_added_id` to it. An `id` that gets
+        // past the test above is therefore larger than every key present. A
+        // rejection reason no input can produce is decoration, and this one
+        // was: `Reason::DuplicateId` was removed with the check.
         if id <= self.last_added_id {
             return reject(Reason::NonMonotonicId {
                 got: id,
                 previous: self.last_added_id,
             });
-        }
-        if self.db.contains_key(&id) {
-            return reject(Reason::DuplicateId(id));
         }
         self.stats.additions = self.stats.additions.saturating_add(1);
 

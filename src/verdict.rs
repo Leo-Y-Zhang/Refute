@@ -59,14 +59,17 @@ pub enum Reason {
     /// The hint list ran out without reaching a conflict.
     NoConflict,
     /// Step identifiers must strictly increase.
+    ///
+    /// This is also what forbids reusing an identifier: everything in the
+    /// clause database is at most the last identifier added, so an id that
+    /// passes this test is larger than every one present. There is no
+    /// `DuplicateId` beside it, because nothing could ever produce one.
     NonMonotonicId {
         /// The identifier just read.
         got: ClauseId,
         /// The largest identifier added before it.
         previous: ClauseId,
     },
-    /// A step reused an identifier already in the database.
-    DuplicateId(ClauseId),
     /// The proof ended without deriving the empty clause.
     NoEmptyClause,
 }
@@ -90,7 +93,6 @@ impl fmt::Display for Reason {
                     "step id {got} does not exceed the previous id {previous}"
                 )
             }
-            Self::DuplicateId(id) => write!(f, "step id {id} is already in the database"),
             Self::NoEmptyClause => write!(f, "proof contains no empty clause"),
         }
     }

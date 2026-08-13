@@ -90,7 +90,7 @@ pub enum Reason {
     Parse(ParseError), MissingHint(ClauseId), HintSatisfied(ClauseId),
     HintNotUnit(ClauseId), EarlyConflict(ClauseId), NoConflict,
     NonMonotonicId { got: ClauseId, previous: ClauseId },
-    DuplicateId(ClauseId), NoEmptyClause,
+    NoEmptyClause,
 }
 pub enum Unsupported { RatHints { line: u64 }, EmptyHints { line: u64 } }
 
@@ -117,8 +117,7 @@ and catches reordered proofs.
 check_add(id, lits, hints):
   if hints is Rat   -> return Unsupported(RatHints)     # before anything else
   if hints is Empty -> return Unsupported(EmptyHints)   # before anything else
-  if id <= last_added_id -> reject NonMonotonicId
-  if db contains id      -> reject DuplicateId
+  if id <= last_added_id -> reject NonMonotonicId   # which also forbids reuse
   mark = trail.len()
   for l in lits:
       if assigned_true(-l): unwind(mark); return Ok(Tautology)   # sound: adding a tautology is a no-op
