@@ -132,6 +132,49 @@ fn p8_repeated_literal_in_a_lemma_verifies() {
     assert_eq!(outcome.verdict, Verdict::Verified);
 }
 
+/// P12. A tautological lemma with an **empty hint list**, which is the one
+/// shape that reaches the tautology path of the RAT step.
+///
+/// `taut_lemma` carries a RUP hint, so it goes down `check_rup` and leaves
+/// `check_rat`'s own tautology exit — accept before the pivot is read and
+/// before the candidate scan — with no coverage at all. Measured: deleting the
+/// `unwind` on that exit left all 77 tests green.
+///
+/// It is also the one construct that breaks
+/// `candidate_scans == rat_additions + vacuous_rat_additions`, exactly as the
+/// note on `Stats::candidate_scans` says it would, so this test asserts the
+/// counters itself rather than going through `counters` below.
+///
+/// Built here rather than in `tools/mutate.py` for P8's reason: no solver
+/// emits a tautological lemma, and backward checking would trim it if one did.
+/// The rest of the proof is a real RUP derivation over a formula that is
+/// unsatisfiable by propagation alone.
+#[test]
+fn p12_a_tautological_rat_lemma_is_accepted_and_unwound() {
+    let formula = "p cnf 3 4\n1 2 0\n-2 0\n-1 3 0\n-3 0\n";
+    // Lemma 5 is `1 or not-1` with no hints: RAT-shaped, so it is classified
+    // as a vacuous RAT addition, and accepted as a tautology before the scan
+    // the classification predicts. Steps 6 and 7 are ordinary RUP.
+    let proof = "5 1 -1 0 0\n6 1 0 1 2 0\n7 0 6 3 4 0\n";
+    let outcome = refute::check_readers(
+        Cursor::new(formula.as_bytes()),
+        Cursor::new(proof.as_bytes()),
+        &Limits::default(),
+    );
+    assert_eq!(outcome.verdict, Verdict::Verified);
+    assert_eq!(outcome.stats.vacuous_rat_additions, 1);
+    // The documented exception: accepted before the scan, so the scan never
+    // happened. Every other fixture in this file asserts the equality.
+    assert_eq!(outcome.stats.candidate_scans, 0);
+    // The assertion this test exists for. The tautology assigned a literal and
+    // returned early; leave it on the trail and the next step reads a hint
+    // under an assignment it was never checked against.
+    assert_eq!(
+        outcome.stats.assignments, outcome.stats.assignments_undone,
+        "the tautology's assignment was left on the trail"
+    );
+}
+
 /// Every counter below was computed from the fixture bytes by a separate
 /// script, before the checker existed, and matches the table in `docs/TDD.md`
 /// part 2 that the design measured with a throwaway reference checker. They
@@ -141,6 +184,14 @@ fn p8_repeated_literal_in_a_lemma_verifies() {
 /// checker that scans the database on every addition, and — the one that
 /// matters — a checker that skips the scan on an addition with no hints, which
 /// is the largest false-accept hole in this milestone.
+///
+/// The trail balance is asserted here too, so that every positive fixture pins
+/// it rather than only `b13_large_formula_unwinds_in_proportion_to_
+/// assignments`, whose proof is pure RUP. A RAT step unwinds on nine paths —
+/// the tautology, the missing pivot, each rejection inside a block, between
+/// blocks, and at the end — and B13 walks none of them. An unwind missed on
+/// any of them leaks assignments from one step into the next, which is how a
+/// hint gets classified against a trail it was never checked under.
 fn counters(cnf: &str, proof: &str) -> refute::Stats {
     let stats = common::outcome(cnf, proof).stats;
     assert_eq!(
@@ -149,6 +200,11 @@ fn counters(cnf: &str, proof: &str) -> refute::Stats {
             .rat_additions
             .saturating_add(stats.vacuous_rat_additions),
         "the candidate scan does not happen once per RAT-shaped addition"
+    );
+    assert_eq!(
+        stats.assignments, stats.assignments_undone,
+        "the trail was not empty at the end of the run: {} assigned, {} undone",
+        stats.assignments, stats.assignments_undone
     );
     stats
 }

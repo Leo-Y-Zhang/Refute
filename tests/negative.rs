@@ -258,6 +258,20 @@ fn assert_caught_by(cnf: &str, proof: &str, step: u64, line: u64, resolvent: u64
     );
 }
 
+/// The same, for a rejection reached before any block was being checked, where
+/// `Rejection::resolvent` is `None` rather than a block identifier.
+fn assert_caught_before_the_blocks(cnf: &str, proof: &str, step: u64, line: u64, reason: &Reason) {
+    assert_rejected(cnf, proof);
+    let rejection = rejection(cnf, proof);
+    assert_eq!(&rejection.reason, reason, "caught by a different rule");
+    assert_eq!(rejection.step, Some(step), "the wrong step");
+    assert_eq!(rejection.line, line, "the wrong proof line");
+    assert_eq!(
+        rejection.resolvent, None,
+        "no block was being checked when this was rejected"
+    );
+}
+
 /// R1. The wrong pivot: the first two literals of a RAT lemma swapped.
 ///
 /// The pivot is the lemma's first literal *as written in the file*, and
@@ -411,5 +425,81 @@ fn r8_rat_without_pivot() {
     assert_eq!(
         rejection_reason("n12_bare_empty_clause.cnf", "n12_bare_empty_clause.lrat"),
         Reason::RatWithoutPivot
+    );
+}
+
+/// R9. One lemma with two resolvent blocks, where the second is only refuted
+/// once the first block's propagations have been taken back.
+///
+/// Hand-built, because no mutation of a real proof reaches it: every block in
+/// every real file is refuted by the negation of its own resolvent and
+/// propagates nothing at all, so no real block leaves a trail for the next one
+/// to inherit. Here the first block propagates `-2` and conflicts; leave that
+/// in place and the second block's resolvent looks already refuted, the lemma
+/// is accepted, the empty clause follows from it, and `s VERIFIED` is printed
+/// for a formula `kissat` reports SATISFIABLE. Its satisfiability is checked
+/// by `kissat` during fixture generation for that reason.
+///
+/// Written after the code rather than before it, and justified by a recorded
+/// mutation kill instead: deleting the `unwind(base)` between blocks makes
+/// this test, and only this test, fail.
+#[test]
+fn r09_second_block_needs_its_own_trail() {
+    assert_caught_by(
+        "r09_second_block_needs_its_own_trail.cnf",
+        "r09_second_block_needs_its_own_trail.lrat",
+        4,
+        1,
+        2,
+        &Reason::NoConflict,
+    );
+}
+
+/// R10. A lemma written `-2 -2`, with an empty hint list.
+///
+/// The negative half of the duplicate-literal coverage. P8 and B19 pin that a
+/// repeated literal is *accepted*; nothing pinned what it must not be read as.
+/// A repeat is idempotent — `-2 -2` is the clause `-2`, and the second copy is
+/// falsified by the first, not satisfied by it — but a checker that reads it as
+/// `x or not-x` has a tautology, and a tautology is accepted before the
+/// candidate scan runs. Both clauses of this formula hold `2`, so that scan is
+/// the only thing between this file and `s VERIFIED` on a formula `kissat`
+/// reports SATISFIABLE.
+#[test]
+fn r10_repeated_literal_is_not_a_tautology() {
+    assert_caught_by(
+        "r10_repeated_literal_is_not_a_tautology.cnf",
+        "r10_repeated_literal_is_not_a_tautology.lrat",
+        3,
+        1,
+        1,
+        &Reason::MissingResolvent {
+            pivot: Lit::new(-2).unwrap(),
+        },
+    );
+}
+
+/// R11. A RAT-shaped line whose hint prefix already reaches a conflict.
+///
+/// **This one is not a safety property, and should not be read as one.** The
+/// lemma is RUP, the proof is valid, `kissat` reports the formula
+/// UNSATISFIABLE and `drat-trim` verifies the same lemma sequence in DRAT form
+/// during fixture generation. Relaxing this rule would accept a good proof,
+/// not a bad one — it is `docs/TDD.md` part 2's open question 2, and the
+/// strictness is inherited from milestone 1's `EarlyConflict`.
+///
+/// It is here because `Reason::RatLemmaIsRup` had no test at all, and a
+/// strictness rule that no test can reach is what got `Reason::DuplicateId`
+/// deleted in milestone 1. So this is a tripwire on a deliberate change: if it
+/// fails, the question is whether the rule was relaxed on purpose, and if it
+/// was, this test and the reason code go together.
+#[test]
+fn r11_rat_lemma_that_is_already_rup() {
+    assert_caught_before_the_blocks(
+        "r11_rat_lemma_that_is_already_rup.cnf",
+        "r11_rat_lemma_that_is_already_rup.lrat",
+        5,
+        1,
+        &Reason::RatLemmaIsRup(2),
     );
 }
