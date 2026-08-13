@@ -5,9 +5,14 @@ Every mutation here is deterministic: run it twice and you get the same bytes.
 That matters because the committed fixtures are what CI checks, and a fixture
 that drifts is a test that quietly changes what it asserts.
 
-Four fixtures cannot come from a solver and are built here instead. Each says
+Five fixtures cannot come from a solver and are built here instead. Each says
 why in a comment at its construction site:
 
+  resolvent_propagates every resolvent block in every proof measured is refuted
+                      by the negation of its own resolvent, so no real file
+                      exercises the hint walk inside a block. The same two
+                      lemmas in DRAT form are verified by drat-trim during
+                      generation; only the hint lists are hand-supplied.
   unit_chain          drat-trim's backward checking trims a chain of unit
                       lemmas down to a single step, so a proof whose steps are
                       all unit lemmas cannot survive it. The same lemma
@@ -82,6 +87,48 @@ def additions(steps):
     return [i for i, s in enumerate(steps) if s[0] == ADD]
 
 
+def split_hints(hints):
+    """Splits a flat hint list into (prefix, [(clause, hints), ...]).
+
+    A negative identifier opens a resolvent block and every positive one after
+    it belongs to that block; the positives before the first negative are the
+    prefix. That is the grammar in docs/TDD.md part 2, and it is the only place
+    in this file that knows it.
+    """
+    prefix = []
+    blocks = []
+    for hint in hints:
+        if hint < 0:
+            blocks.append((-hint, []))
+        elif blocks:
+            blocks[-1][1].append(hint)
+        else:
+            prefix.append(hint)
+    return prefix, blocks
+
+
+def join_hints(prefix, blocks):
+    flat = list(prefix)
+    for clause, hints in blocks:
+        flat.append(-clause)
+        flat.extend(hints)
+    return flat
+
+
+def first_with_blocks(steps):
+    for index in additions(steps):
+        if any(h < 0 for h in steps[index][3]):
+            return index
+    raise AssertionError("no addition in this proof carries a resolvent block")
+
+
+def first_without_hints(steps):
+    for index in additions(steps):
+        if not steps[index][3]:
+            return index
+    raise AssertionError("no addition in this proof has an empty hint list")
+
+
 def clause_count(cnf_text):
     return sum(
         1
@@ -138,6 +185,34 @@ def build_unit_chain(out, length=12):
         previous = ident
     steps.append((ADD, num_clauses + length, [], [previous, num_clauses]))
     write(os.path.join(out, "unit_chain.lrat"), render(steps))
+
+
+def build_resolvent_propagates(out):
+    """P11. The one proof whose resolvent block has to propagate.
+
+    All 703 resolvent blocks measured across the eleven proofs behind
+    docs/TDD.md part 2 are refuted by the negation of their own resolvent, with
+    an empty hint list. So no real file exercises the hint walk inside a block,
+    and that path would ship uncovered.
+
+    Formula (see tools/instances.py):
+        1: (-1 2)   2: (2 4)   3: (-4 5)   4: (-5 3 1)   5: (-2)   6: (-3)
+
+    Lemma 7 is (1 3), pivot 1. Clause 1 is the only clause holding -1, so it is
+    the only resolution candidate; the prefix is empty, so the block starts
+    from the negated lemma alone. Resolving -1 away leaves 2, whose negation
+    propagates 4, then 5, and clause 4 is then falsified -- three hints, with
+    the conflict on the last. Step 8 derives the empty clause by RUP.
+
+    Only the hint lists are hand-supplied. gen_fixtures.sh verifies the same
+    two lemmas in DRAT form against the same formula, so the claim that they
+    refute it is drat-trim's.
+    """
+    steps = [
+        (ADD, 7, [1, 3], [-1, 2, 3, 4]),
+        (ADD, 8, [], [5, 6, 7, 1]),
+    ]
+    write(os.path.join(out, "resolvent_propagates.lrat"), render(steps))
 
 
 def build_taut_lemma(out, base_cnf, base_lrat):
@@ -315,6 +390,138 @@ def build_negatives(out, base_name, kissat):
     emit("n12_bare_empty_clause", "%d 0 0\n" % (num_clauses + 1))
 
 
+def build_rat_negatives(out, base_name):
+    """R1-R3 and R5-R8: one mutation per new rejection rule in part 2.
+
+    Every choice below is "the first one that qualifies, in file order", so a
+    re-run produces the same bytes and the fixture's meaning does not drift
+    when the base proof is regenerated.
+    """
+    cnf_text = read(os.path.join(out, base_name + ".cnf"))
+    steps = parse_lrat(read(os.path.join(out, base_name + ".lrat")))
+    num_clauses = clause_count(cnf_text)
+
+    def emit(tag, steps_out):
+        write(os.path.join(out, tag + ".cnf"), cnf_text)
+        write(os.path.join(out, tag + ".lrat"),
+              steps_out if isinstance(steps_out, str) else render(steps_out))
+
+    rat = first_with_blocks(steps)
+    _, rat_id, rat_lits, rat_hints = steps[rat]
+    rat_prefix, rat_blocks = split_hints(rat_hints)
+    assert len(rat_lits) > 1, "the first RAT lemma is a unit; nothing to swap"
+
+    # R1: the first two literals of a RAT lemma swapped. The pivot is the first
+    # literal as written, so this is the wrong-pivot mutation -- and it is the
+    # one a checker reading the pivot after normalisation fails on, because
+    # normalise sorts.
+    swapped = list(steps)
+    swapped[rat] = (ADD, rat_id, [rat_lits[1], rat_lits[0]] + rat_lits[2:], rat_hints)
+    emit("r01_wrong_pivot", swapped)
+
+    # R2: the last resolvent block, and its hints, deleted. The candidate it
+    # covered is then uncovered, which is the mutation this milestone exists to
+    # catch: every real block is refuted by its own negation, so a checker that
+    # skipped trivially refuted candidates could not tell this from the truth.
+    dropped = list(steps)
+    dropped[rat] = (ADD, rat_id, rat_lits, join_hints(rat_prefix, rat_blocks[:-1]))
+    emit("r02_block_dropped", dropped)
+
+    # R3: a block redirected to a clause deleted earlier in the proof. The
+    # first RAT addition with anything deleted before it, redirected to the
+    # smallest such identifier.
+    target = None
+    for index in additions(steps):
+        if not any(h < 0 for h in steps[index][3]):
+            continue
+        gone = sorted(set(i for s in steps[:index] if s[0] == DELETE for i in s[2]))
+        if gone:
+            target = (index, gone[0])
+            break
+    assert target, "no RAT addition follows a deletion"
+    index, stale = target
+    _, ident, lits, hints = steps[index]
+    prefix, blocks = split_hints(hints)
+    stale_blocks = [(stale, blocks[0][1])] + blocks[1:]
+    redirected = list(steps)
+    redirected[index] = (ADD, ident, lits, join_hints(prefix, stale_blocks))
+    emit("r03_block_names_deleted_clause", redirected)
+
+    # R5: an empty-hint lemma reordered so that its pivot does have resolution
+    # candidates. The empty hint list is a claim -- "this pivot has none" -- and
+    # a checker that takes it at face value passes every other test here.
+    empty = first_without_hints(steps)
+    _, empty_id, empty_lits, _ = steps[empty]
+    assert len(empty_lits) > 1, "the first empty-hint lemma is a unit"
+    reordered = list(steps)
+    reordered[empty] = (ADD, empty_id,
+                        [empty_lits[1], empty_lits[0]] + empty_lits[2:], [])
+    emit("r05_empty_hints_with_candidates", reordered)
+
+    # R6: an extra block naming a live clause that is not a candidate. The
+    # smallest live identifier that is not already named by a block.
+    live = live_ids(steps, rat, num_clauses)
+    named = set(clause for clause, _ in rat_blocks)
+    extra = min(i for i in live if i not in named)
+    padded = list(steps)
+    padded[rat] = (ADD, rat_id, rat_lits,
+                   join_hints(rat_prefix, rat_blocks + [(extra, [])]))
+    emit("r06_extra_block", padded)
+
+    # R7: a hint appended to a block whose resolvent its own negation already
+    # refutes, so the hint can never be reached. Same argument as EarlyConflict
+    # in part 1: sound to ignore, and real output never does it.
+    assert rat_prefix, "the first RAT line has no prefix hint to append"
+    assert not rat_blocks[-1][1], "the last block already carries hints"
+    with_padding = list(rat_blocks)
+    with_padding[-1] = (rat_blocks[-1][0], [rat_prefix[0]])
+    unreachable = list(steps)
+    unreachable[rat] = (ADD, rat_id, rat_lits, join_hints(rat_prefix, with_padding))
+    emit("r07_padded_block", unreachable)
+
+    # R8: an empty lemma with a RAT-shaped hint list. There is no first
+    # literal, so there is no pivot, so the RAT predicate cannot be evaluated
+    # at all. Fail closed. n12_bare_empty_clause is the same rule with no hints
+    # whatsoever.
+    emit("r08_rat_without_pivot", "%d 0 -1 0\n" % (num_clauses + 1))
+
+
+def build_block_hint_negatives(out, base_name):
+    """R4 and R4b: the two mutations of a resolvent block's own hint walk.
+
+    They need the one fixture whose block hints propagate; every real block is
+    refuted before its first hint is read.
+    """
+    cnf_text = read(os.path.join(out, base_name + ".cnf"))
+    steps = parse_lrat(read(os.path.join(out, base_name + ".lrat")))
+    num_clauses = clause_count(cnf_text)
+
+    def emit(tag, steps_out):
+        write(os.path.join(out, tag + ".cnf"), cnf_text)
+        write(os.path.join(out, tag + ".lrat"), render(steps_out))
+
+    index = first_with_blocks(steps)
+    _, ident, lits, hints = steps[index]
+    prefix, blocks = split_hints(hints)
+    clause, block_hints = blocks[0]
+    assert len(block_hints) > 1, "the block does not propagate; nothing to break"
+
+    # R4: the block's last hint redirected to the next live clause.
+    live = live_ids(steps, index, num_clauses)
+    following = block_hints[-1] + 1
+    assert following in live, "no live clause follows the block's last hint"
+    redirected = list(steps)
+    redirected[index] = (ADD, ident, lits, join_hints(
+        prefix, [(clause, block_hints[:-1] + [following])] + blocks[1:]))
+    emit("r04_block_hint_redirected", redirected)
+
+    # R4b: the block's conflict hint dropped, so its walk runs out.
+    trimmed = list(steps)
+    trimmed[index] = (ADD, ident, lits, join_hints(
+        prefix, [(clause, block_hints[:-1])] + blocks[1:]))
+    emit("r04b_block_conflict_hint_dropped", trimmed)
+
+
 def find_satisfiable_variant(cnf_text, kissat, out):
     """Flips the sign of one literal, in file order, until the formula is SAT.
 
@@ -466,6 +673,7 @@ def main():
     out = args.fixtures
 
     build_unit_chain(out)
+    build_resolvent_propagates(out)
     build_taut_lemma(out,
                      os.path.join(out, "deletes_originals.cnf"),
                      os.path.join(out, "deletes_originals.lrat"))
@@ -474,6 +682,8 @@ def main():
                             os.path.join(out, "tiny_unsat.cnf"),
                             os.path.join(out, "tiny_unsat.lrat"))
     build_negatives(out, "deletes_originals", args.kissat)
+    build_rat_negatives(out, "real_rat_proof")
+    build_block_hint_negatives(out, "resolvent_propagates")
     build_boundaries(out,
                      os.path.join(out, "tiny_unsat.cnf"),
                      os.path.join(out, "tiny_unsat.lrat"),

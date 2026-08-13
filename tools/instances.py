@@ -86,6 +86,23 @@ def implication_chain(length):
     return length, clauses
 
 
+def resolvent_chain():
+    """The one formula whose proof has a resolvent block that propagates.
+
+    Every resolvent block in every proof measured for milestone 1b -- 703 of
+    them -- is refuted by its own negation alone, so no real file exercises the
+    hint walk inside a block. This formula is built so that one does.
+
+    Lemma (1 3) is RAT on pivot 1. Clause 1 is the only clause holding -1, so
+    it is the only resolution candidate, and the resolvent (1 3 2) needs three
+    unit propagations before it conflicts: 2 -> 4 -> 5 -> the clause the lemma
+    resolves back onto. The lemma is also RUP by full propagation, which is
+    what lets drat-trim verify the same lemma sequence in DRAT form during
+    generation -- the hint lists are hand-supplied, the verdict is not.
+    """
+    return 5, [[-1, 2], [2, 4], [-4, 5], [-5, 3, 1], [-2], [-3]]
+
+
 INSTANCES = {
     # P1: the end-to-end happy path, small enough to read by eye.
     "tiny_unsat": all_assignments(3),
@@ -94,6 +111,12 @@ INSTANCES = {
     # B12: the smallest measured instance whose proof contains both an empty
     # hint list and a RAT resolvent block.
     "real_rat_proof": pigeonhole(5, 4),
+    # P9: the same construct at scale. 624 additions, 42 RAT lines, 30 empty
+    # hint lists, 108 resolvent blocks, 353 deletions. A checker that is subtly
+    # over-strict about RAT still passes 5x4.
+    "rat_pigeonhole": pigeonhole(7, 6),
+    # P11: the formula behind the hand-built resolvent chain.
+    "resolvent_propagates": resolvent_chain(),
     # P2: the formula behind the hand-built unit chain.
     "unit_chain": implication_chain(12),
     # P6: 980 real RUP lemmas and no unsupported construct anywhere. The other

@@ -42,8 +42,10 @@ python3 "$root/tools/instances.py" "$fixtures"
 # corpus deliberately contains satisfiable and malformed formulas.
 for name in $(python3 "$root/tools/instances.py" --names); do
     cnf="$fixtures/$name.cnf"
-    # unit_chain's proof is hand-built: see the note in tools/mutate.py.
+    # Two proofs are hand-built: see the notes in tools/mutate.py. Both have
+    # their lemma sequence validated against drat-trim in DRAT form below.
     [ "$name" = "unit_chain" ] && continue
+    [ "$name" = "resolvent_propagates" ] && continue
 
     "$kissat" --no-binary -q "$cnf" "$work/$name.drat" && rc=$? || rc=$?
     if [ "$rc" -ne 20 ]; then
@@ -75,6 +77,34 @@ if ! "$drat_trim" "$fixtures/unit_chain.cnf" "$work/unit_chain.drat" \
     exit 1
 fi
 echo "validated unit_chain lemma sequence against drat-trim"
+
+# The same independent check for the other hand-built proof. Only the hint
+# lists -- prefix and resolvent block -- are mine; that the two lemmas refute
+# the formula is drat-trim's verdict on the same sequence in DRAT form.
+printf '1 3 0\n0\n' > "$work/resolvent_propagates.drat"
+if ! "$drat_trim" "$fixtures/resolvent_propagates.cnf" \
+    "$work/resolvent_propagates.drat" | grep -q '^s VERIFIED'; then
+    echo "resolvent_propagates: drat-trim rejected the hand-built lemma sequence" >&2
+    exit 1
+fi
+echo "validated resolvent_propagates lemma sequence against drat-trim"
+
+# B17: a real binary proof, which is the mistake the PRD says drat-trim reports
+# as a bad proof. kissat writes binary DRAT unless it is told not to, so this is
+# the same command as above with --no-binary forgotten. Only the first 64 bytes
+# are kept: the fixture has to be recognisable, not checkable.
+"$kissat" -q "$fixtures/real_rat_proof.cnf" "$work/binary.drat" && rc=$? || rc=$?
+if [ "$rc" -ne 20 ]; then
+    echo "b17_binary_proof: kissat did not report UNSATISFIABLE (exit $rc)" >&2
+    exit 1
+fi
+head -c 64 "$work/binary.drat" > "$fixtures/b17_binary_proof.lrat"
+cp "$fixtures/real_rat_proof.cnf" "$fixtures/b17_binary_proof.cnf"
+if [ "$(head -c 1 "$fixtures/b17_binary_proof.lrat")" != "a" ]; then
+    echo "b17_binary_proof: first byte is not the binary DRAT addition marker" >&2
+    exit 1
+fi
+echo "captured b17_binary_proof.lrat (64 bytes of binary DRAT)"
 
 python3 "$root/tools/mutate.py" --fixtures "$fixtures" --kissat "$kissat"
 
