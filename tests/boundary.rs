@@ -307,6 +307,48 @@ fn b14_an_io_error_names_the_line_that_failed() {
     }
 }
 
+/// B15. A UTF-8 byte order mark at the start of either file.
+///
+/// Windows editors write one whenever a file is opened and saved, and the
+/// fixtures for this project are generated on Windows. Neither format says
+/// anything about it, so the decision is ours: skip it once, at the very
+/// start.
+///
+/// Skipping cannot cause a false `VERIFIED` — the mark carries no clause, no
+/// hint and no identifier — while rejecting fails a file that is otherwise
+/// exactly right, and the message a reader got instead named a token they
+/// could not see. A mark anywhere else is not an encoding artefact, and is
+/// still an error.
+#[test]
+fn b15_a_leading_byte_order_mark_is_skipped() {
+    const MARK: &str = "\u{feff}";
+    let formula = std::fs::read_to_string(common::fixture("tiny_unsat.cnf")).unwrap();
+    let proof = std::fs::read_to_string(common::fixture("tiny_unsat.lrat")).unwrap();
+
+    for (cnf, lrat) in [
+        (format!("{MARK}{formula}"), proof.clone()),
+        (formula.clone(), format!("{MARK}{proof}")),
+        (format!("{MARK}{formula}"), format!("{MARK}{proof}")),
+    ] {
+        let outcome = refute::check_readers(
+            Cursor::new(cnf.as_bytes()),
+            Cursor::new(lrat.as_bytes()),
+            &Limits::default(),
+        );
+        assert_eq!(outcome.verdict, Verdict::Verified, "cnf was {cnf:?}");
+    }
+
+    let mut lines: Vec<String> = formula.lines().map(str::to_owned).collect();
+    lines[1] = format!("{MARK}{}", lines[1]);
+    let err = parse_error(&(lines.join("\n") + "\n"), &proof);
+    assert_eq!(err.source, Source::Formula);
+    assert!(
+        matches!(err.kind, ParseErrorKind::NotAnInteger(_)),
+        "a mark on line 2 is a corruption, not an encoding: {err:?}"
+    );
+    assert_eq!(err.line, 2);
+}
+
 /// B12. A whole real `drat-trim` proof containing RAT blocks.
 ///
 /// It reports the *empty hint list*, not the RAT block, because in every

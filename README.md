@@ -88,12 +88,21 @@ survives `refute a.cnf b.lrat > log.txt`.
   difference a speedup is dishonest.
 - **Trim proofs, extract cores, read binary LRAT, or run anything in parallel.**
 
-## One behavioural difference from `drat-trim`
+## Where Refute differs from `drat-trim`
 
-`drat-trim` ignores deletions of unit clauses. That rule protects backward
-checking. Refute checks forward with hints and needs no such exception: if a
-later step needs a deleted unit, its hint lookup fails and the proof is
-rejected. Refute is the stricter of the two here, on purpose.
+**A leading UTF-8 byte order mark is skipped**, once, at the start of either
+file. Windows editors write one on save; neither format mentions it. Skipping
+cannot produce a false `VERIFIED` — the mark carries no clause, no hint and no
+identifier — while rejecting fails a file that is otherwise exactly right, with
+a message naming a token its author cannot see. Refute is the more permissive
+of the two here, and measurably so: `kissat` refuses such a formula outright
+with `parse error: expected 'c' or 'p' at start of line`. A mark anywhere other
+than the first line is still an error.
+
+**Deletions of unit clauses are honoured.** `drat-trim` ignores them, a rule
+that protects backward checking. Refute checks forward with hints and needs no
+such exception: if a later step needs a deleted unit, its hint lookup fails and
+the proof is rejected. Refute is the stricter of the two here, on purpose.
 
 Deletion is otherwise permissive — deleting an identifier that was never added
 is counted under `--stats`, not rejected. Deletion only ever removes tools from

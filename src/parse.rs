@@ -146,6 +146,24 @@ impl fmt::Display for ParseError {
     }
 }
 
+/// Strips a UTF-8 byte order mark from the first line of a file.
+///
+/// Windows editors write one whenever a file is opened and saved, and neither
+/// DIMACS nor LRAT says anything about it, so the decision is ours. Skipping
+/// cannot cause a false `VERIFIED`: the mark carries no clause, no hint and no
+/// identifier. Rejecting would fail a file that is otherwise exactly right,
+/// with a message naming a token its author cannot see.
+///
+/// Once, and only on line 1. A mark in the middle of a file is not an encoding
+/// artefact; it is a corruption, and it is reported as one.
+pub(crate) fn strip_byte_order_mark(line: &str, line_no: u64) -> &str {
+    if line_no == 1 {
+        line.strip_prefix('\u{feff}').unwrap_or(line)
+    } else {
+        line
+    }
+}
+
 /// Scans a signed decimal integer with checked arithmetic.
 ///
 /// Returns the value as `i64` so that the caller can range-check against its

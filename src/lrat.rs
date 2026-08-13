@@ -14,7 +14,9 @@ use std::io::BufRead;
 use crate::cnf::io_kind;
 use crate::limits::Limits;
 use crate::lit::{ClauseId, Lit};
-use crate::parse::{scan_i64, scan_id, scan_lit, ParseError, ParseErrorKind, Source};
+use crate::parse::{
+    scan_i64, scan_id, scan_lit, strip_byte_order_mark, ParseError, ParseErrorKind, Source,
+};
 
 /// The hint list of an addition step, classified before anything is checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,15 +110,22 @@ impl<R: BufRead> Iterator for LratReader<R> {
             }
             self.line = self.line.saturating_add(1);
             let line = core::mem::take(&mut self.buffer);
-            if line.trim().is_empty() {
-                self.buffer = line;
-                continue;
-            }
-            let parsed = parse_step(line.trim(), self.line, &self.limits);
+            // A line holding nothing but a byte order mark is an empty line,
+            // so the mark is stripped before the emptiness test rather than
+            // after it.
+            let parsed = {
+                let content = strip_byte_order_mark(line.trim(), self.line);
+                if content.is_empty() {
+                    None
+                } else {
+                    Some(parse_step(content, self.line, &self.limits))
+                }
+            };
             self.buffer = line;
             return match parsed {
-                Ok(step) => Some(Ok(step)),
-                Err(kind) => self.fail(kind),
+                None => continue,
+                Some(Ok(step)) => Some(Ok(step)),
+                Some(Err(kind)) => self.fail(kind),
             };
         }
     }

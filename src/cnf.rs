@@ -4,7 +4,7 @@ use std::io::BufRead;
 
 use crate::limits::Limits;
 use crate::lit::{Clause, Lit};
-use crate::parse::{scan_i64, scan_lit, ParseError, ParseErrorKind, Source};
+use crate::parse::{scan_i64, scan_lit, strip_byte_order_mark, ParseError, ParseErrorKind, Source};
 
 /// Something odd but survivable about the formula file.
 ///
@@ -91,7 +91,7 @@ pub fn parse_dimacs<R: BufRead>(mut reader: R, limits: &Limits) -> Result<Cnf, P
             break;
         }
         line_no = line_no.saturating_add(1);
-        let line = buffer.trim();
+        let line = strip_byte_order_mark(buffer.trim(), line_no);
 
         let mut tokens = line.split_ascii_whitespace();
         let first = match tokens.next() {
