@@ -350,8 +350,9 @@ or it is a lie by omission.
 
 ## Open questions
 
-1. **Ship M1 publicly with `UNSUPPORTED` common, or hold for 1b?** PRD Q1. Changes
-   the README's framing, not this design. *Recommendation: ship, loudly limited.*
+1. ~~**Ship M1 publicly with `UNSUPPORTED` common, or hold for 1b?**~~
+   **Closed by the owner (2026-08-13): ship.** PRD Q1 records the decision; the
+   README's opening already frames the limitation.
 2. **`Limits::max_var` default of 2^26 (67M vars).** The author's vdW formulas
    use a few thousand variables. 2^26 is generous; 2^22 would be safer for a
    browser. **Narrowed after the build:** this no longer decides an allocation

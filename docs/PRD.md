@@ -153,20 +153,19 @@ milestone 1b lands.
 
 ## Open questions
 
+All three were answered by the owner on 2026-08-13.
+
 1. **Does milestone 1 ship publicly with `s UNSUPPORTED` on most real proofs?**
-   The alternative is to hold the release until 1b. Recommendation: ship, because
-   the repo is public from birth and an honest partial checker with a loud
-   limitation is a better public artefact than an empty repo. **Owner's call —
-   this changes the README's opening paragraph but not the design.**
-2. **LICENCE text.** MIT is assumed. The copyright line is proposed as
-   `Copyright (c) 2026 Refute contributors` — no personal name, per the standing
-   privacy rule. Confirm, or nominate the public handle instead.
-3. **Playground certificate set (M4).** The published certificates in the author's
-   records are *colourings* (lower bounds, 73 bytes), not proofs. The upper-bound
-   DRAT proofs are 2.5 MB at the cheapest rung and are regenerated on demand, and
-   LRAT measures ~2.5x DRAT. A browser playground can therefore preload the
-   a(4) rung at best. Confirm that is the intended demonstration, or the M4 scope
-   changes. **Does not block milestone 1.**
+   **Answered: ship.** The README opens by stating exactly what is and is not
+   checked; RAT support (milestone 1b) removes the limitation.
+2. **LICENCE text.** **Answered:** MIT with `Copyright (c) 2026 Leo Y. Zhang`,
+   matching the author's other public repositories. The earlier
+   "no personal name" proposal read the privacy rule more broadly than it is
+   written; the public name is public.
+3. **Playground certificate set (M4).** **Answered:** the playground preloads
+   the A217236 a(4)-rung DRAT certificate (~2.5 MB) as the demonstration;
+   larger proofs remain native-CLI territory. The colouring certificates may
+   get a small separate widget later and are not part of the M4 gate.
 
 ## Not doing / rejected alternatives
 
