@@ -114,9 +114,19 @@ fn a_double_dash_ends_the_flags() {
     );
 }
 
-/// A verdict must survive `refute a.cnf b.lrat > log.txt`. No colour, no
-/// Unicode, no emoji, no escape sequences — checked on the bytes, across all
-/// three verdicts, because the register of this tool is part of its design.
+/// A verdict must survive `refute a.cnf b.lrat > log.txt`, and it must survive
+/// a hostile file.
+///
+/// The first four cases are benign, and on their own they were decoration: no
+/// fixture in the suite contained a byte that could have failed them. The last
+/// two carry a real payload — `ESC [ 1 A ESC [ 2 K s VERIFIED`, which moves
+/// the cursor up a line, clears it, and writes `s VERIFIED` over the top —
+/// once in the formula and once in the proof, because both files are quoted
+/// back by name when a token will not parse.
+///
+/// The assertion is on the bytes rather than on the attack: every byte out is
+/// printable ASCII or a line break. `is_ascii()` alone would pass ESC, which
+/// is 0x1b and entirely ASCII.
 #[test]
 fn output_is_plain_ascii_in_every_verdict() {
     let cases = [
@@ -124,20 +134,33 @@ fn output_is_plain_ascii_in_every_verdict() {
         ("n05_no_empty_clause.cnf", "n05_no_empty_clause.lrat"),
         ("real_rat_proof.cnf", "real_rat_proof.lrat"),
         ("b06_var_over_limit.cnf", "b06_var_over_limit.lrat"),
+        ("hostile_escape_formula.cnf", "hostile_escape_formula.lrat"),
+        ("hostile_escape_proof.cnf", "hostile_escape_proof.lrat"),
     ];
     for (cnf, proof) in cases {
         let run = common::cli(cnf, proof);
         for (stream, text) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
-            assert!(
-                text.is_ascii(),
-                "{stream} was not ASCII for {proof}: {text:?}"
-            );
-            assert!(
-                !text.contains('\u{1b}'),
-                "{stream} contained an escape sequence for {proof}"
-            );
+            for byte in text.bytes() {
+                assert!(
+                    matches!(byte, 0x20..=0x7e | b'\n' | b'\r'),
+                    "{stream} carried byte {byte:#04x} for {cnf}: {text:?}"
+                );
+            }
         }
     }
+}
+
+/// The escaping is visible, not silent: the bytes are shown as `\xNN` so a
+/// reader can still see what the file actually contained.
+#[test]
+fn an_unreadable_token_is_quoted_with_its_bytes_escaped() {
+    let run = common::cli("hostile_escape_proof.cnf", "hostile_escape_proof.lrat");
+    run.assert("s NOT VERIFIED", 1);
+    assert!(
+        run.stderr.contains("\\x1b[1A\\x1b[2Ks"),
+        "the token must still be quoted, escaped; stderr was {:?}",
+        run.stderr
+    );
 }
 
 /// The three verdict tokens, each with its exit code, in one place. If one of

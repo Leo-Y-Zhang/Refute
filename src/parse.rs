@@ -4,7 +4,7 @@
 //! signed integer — with checked arithmetic, never an `as` cast — lives here
 //! once rather than twice.
 
-use core::fmt;
+use core::fmt::{self, Write as _};
 
 use crate::limits::Limits;
 
@@ -62,26 +62,61 @@ pub enum ParseErrorKind {
     TrailingTokens(String),
 }
 
+/// Text from an input file, on its way into a message a terminal will render.
+///
+/// Every byte outside printable ASCII is written as `\xNN`. An error quotes
+/// the token it could not read, every byte of both files is attacker
+/// controlled, and the two bytes `ESC [` are enough for a formula to move the
+/// cursor up a line, clear it, and write `s VERIFIED` over the verdict that
+/// was there. The escaping is visible rather than silent — the reader still
+/// sees what the file contained, which is the point of quoting it at all.
+///
+/// A multi-byte character becomes several `\xNN`. That is deliberate: a
+/// right-to-left override renders as bytes here rather than reordering the
+/// line it appears in.
+struct Escaped<'a>(&'a str);
+
+impl fmt::Display for Escaped<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0.bytes() {
+            match byte {
+                0x20..=0x7e => f.write_char(char::from(byte))?,
+                other => write!(f, "\\x{other:02x}")?,
+            }
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(msg) => write!(f, "read failed: {msg}"),
+            // The operating system's message names the path it was given, and
+            // that came from the command line, so it goes through the same
+            // filter as everything else quoted here.
+            Self::Io(msg) => write!(f, "read failed: {}", Escaped(msg)),
             Self::UnexpectedEof => write!(f, "expected 0 terminator, found end of file"),
             Self::MissingTerminator => write!(f, "expected 0 terminator, found end of line"),
-            Self::NotAnInteger(tok) => write!(f, "expected an integer, found '{tok}'"),
-            Self::IntegerOverflow(tok) => write!(f, "integer '{tok}' is out of range"),
+            Self::NotAnInteger(tok) => write!(f, "expected an integer, found '{}'", Escaped(tok)),
+            Self::IntegerOverflow(tok) => write!(f, "integer '{}' is out of range", Escaped(tok)),
             Self::VarExceedsLimit { var, limit } => {
                 write!(f, "variable {var} exceeds limit {limit}")
             }
             Self::ListTooLong { limit } => write!(f, "list longer than limit {limit}"),
             Self::BadHeader(line) => {
-                write!(f, "expected 'p cnf <vars> <clauses>', found '{line}'")
+                write!(
+                    f,
+                    "expected 'p cnf <vars> <clauses>', found '{}'",
+                    Escaped(line)
+                )
             }
             Self::DuplicateHeader => write!(f, "a second 'p' header line"),
             Self::NonPositiveClauseId(tok) => {
-                write!(f, "expected a positive clause id, found '{tok}'")
+                write!(f, "expected a positive clause id, found '{}'", Escaped(tok))
             }
-            Self::TrailingTokens(tok) => write!(f, "unexpected token '{tok}' after 0 terminator"),
+            Self::TrailingTokens(tok) => {
+                write!(f, "unexpected token '{}' after 0 terminator", Escaped(tok))
+            }
         }
     }
 }

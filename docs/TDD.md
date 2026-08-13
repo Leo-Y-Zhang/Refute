@@ -194,6 +194,7 @@ in the M4 playground and should be assumed so from M1. Concretely designed again
 | Unbounded allocation | Literal `2000000000` in a clause sizes the assignment vector to 2 GB | `Limits.max_var` (default 2^26); a literal beyond it is a `ParseError`, not a resize |
 | Unbounded allocation | A clause or hint list of 10^9 entries | `Limits.max_clause_len`; parse fails on overrun |
 | Integer overflow | `id` beyond `u64`, literal beyond `i32` | Checked parsing (`checked_mul`/`checked_add`); overflow is a `ParseError`. **No `as` casts on parsed input** |
+| Verdict forgery in a terminal | A token containing `ESC [ 1 A ESC [ 2 K s VERIFIED`, quoted back by the error that could not read it | Every echoed byte outside `0x20..=0x7e` is written as `\xNN` on the way into a message. Fixtures `hostile_escape_formula` and `hostile_escape_proof` carry the real bytes, one per file |
 | Panic as DoS | Any `unwrap`/`expect`/indexing on input-derived data | `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, clippy::arithmetic_side_effects)]` on the library. The CLI may `unwrap` only on its own constants |
 | Non-termination | A proof with 10^9 no-op steps | Bounded by file length; the checker is O(1) memory per step. No loop in the checker is unbounded by input length |
 | Memory growth | A proof that only adds and never deletes | Inherent; reported by `--stats` peak live clauses. Not a defect, but must not be a silent OOM in WASM — M4 sets an explicit heap cap and reports "exceeded" rather than aborting |

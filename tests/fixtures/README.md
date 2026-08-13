@@ -25,6 +25,7 @@ not formatting — `b08_crlf` exists specifically to check CRLF handling.
 | `n01`–`n11` | deterministic mutations of `deletes_originals` by `tools/mutate.py` |
 | `n10` | the satisfiable formula was found by flipping one literal at a time, in file order, until `kissat` returned SAT — so the claim "this is satisfiable" is a solver's, not the author's |
 | `n12`, `b01`–`b11`, `b12b` | constructed by `tools/mutate.py` from the real fixtures |
+| `hostile_escape_formula`, `hostile_escape_proof` | `tiny_unsat` with one token replaced by `ESC [ 1 A ESC [ 2 K s VERIFIED`, once in each file. The bytes are real: `od -c` them before editing either file |
 
 ## Two measured facts that shaped the corpus
 

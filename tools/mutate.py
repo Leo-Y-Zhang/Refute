@@ -432,6 +432,32 @@ def build_boundaries(out, tiny_cnf_path, tiny_lrat_path, rat_lrat_path):
     write(os.path.join(out, "b12b_rat_hints.lrat"), rat_line + "\n")
 
 
+def build_hostile_escapes(out, tiny_cnf_path, tiny_lrat_path):
+    """Terminal escape sequences inside a token, in each file in turn.
+
+    Every byte of both files is attacker-controlled in the milestone-4
+    playground, and an error message quotes the token it could not read. Quoted
+    verbatim, the two bytes ESC [ let the file repaint the line above it -- the
+    line carrying the verdict. The payload here moves the cursor up one line,
+    clears it, and writes `s VERIFIED` over the top of whatever was there.
+
+    The test asserts something narrower and harder to argue with than "the
+    attack fails on my terminal": no byte outside printable ASCII reaches
+    stdout or stderr.
+    """
+    payload = "\x1b[1A\x1b[2Ks VERIFIED"
+    tiny_cnf = read(tiny_cnf_path)
+    tiny_lrat = read(tiny_lrat_path)
+
+    lines = tiny_cnf.splitlines()
+    lines[1] = payload + " 0"
+    write(os.path.join(out, "hostile_escape_formula.cnf"), "\n".join(lines) + "\n")
+    write(os.path.join(out, "hostile_escape_formula.lrat"), tiny_lrat)
+
+    write(os.path.join(out, "hostile_escape_proof.cnf"), tiny_cnf)
+    write(os.path.join(out, "hostile_escape_proof.lrat"), payload + " 0 0\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixtures", required=True)
@@ -452,6 +478,9 @@ def main():
                      os.path.join(out, "tiny_unsat.cnf"),
                      os.path.join(out, "tiny_unsat.lrat"),
                      os.path.join(out, "real_rat_proof.lrat"))
+    build_hostile_escapes(out,
+                          os.path.join(out, "tiny_unsat.cnf"),
+                          os.path.join(out, "tiny_unsat.lrat"))
 
 
 if __name__ == "__main__":
