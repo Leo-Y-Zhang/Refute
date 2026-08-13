@@ -5,7 +5,7 @@ Every mutation here is deterministic: run it twice and you get the same bytes.
 That matters because the committed fixtures are what CI checks, and a fixture
 that drifts is a test that quietly changes what it asserts.
 
-Five fixtures cannot come from a solver and are built here instead. Each says
+Eight fixtures cannot come from a solver and are built here instead. Each says
 why in a comment at its construction site:
 
   resolvent_propagates every resolvent block in every proof measured is refuted
@@ -27,6 +27,12 @@ why in a comment at its construction site:
                       The formula is edited by one literal; the proof is the
                       real one, unchanged, and drat-trim verifies it against
                       the edited formula during generation.
+  r09, r10, r11       three rejection rules whose shape no real proof carries,
+                      so no mutation of one reaches them. kissat is run on each
+                      formula during generation, so whether it is satisfiable
+                      is a solver's claim; r11's lemma sequence is checked by
+                      drat-trim in DRAT form as well, because it is a valid
+                      proof that Refute rejects on strictness alone.
 
 Usage: mutate.py --fixtures DIR [--kissat PATH]
 """
@@ -522,6 +528,67 @@ def build_block_hint_negatives(out, base_name):
     emit("r04b_block_conflict_hint_dropped", trimmed)
 
 
+def build_hand_built_rat_negatives(out, kissat):
+    """R9-R11: three rules that no mutation of a real proof can reach.
+
+    Each formula is put to kissat during generation and the exit code checked,
+    so "this formula is satisfiable" is a solver's claim rather than mine. On
+    R9 and R10 that claim is the whole fixture: both formulas have a model, so
+    an `s VERIFIED` on either is a false accept, not a style disagreement.
+
+    Built rather than mutated, for the reason resolvent_propagates is built.
+    R9 needs a RAT line whose *second* block only fails once the first block's
+    propagations are taken back, and every block in every real proof is refuted
+    by the negation of its own resolvent with no propagation at all (F7 in
+    docs/TDD.md part 2). R10 needs a lemma whose repeated literal could be
+    mistaken for a tautology, which no solver writes and drat-trim would not
+    preserve. R11 needs a RAT-shaped line whose prefix already conflicts,
+    measured at 0 of the 439 lines carrying blocks (F8).
+    """
+    if not kissat:
+        sys.exit("R9-R11 need --kissat: each one states whether its formula is satisfiable")
+
+    # R9. Lemma (1) on pivot 1, with two blocks: clause 1 (-1 2) and clause 2
+    # (-1 -2). The first resolvent propagates -2 and conflicts on clause 3; the
+    # second is refuted only if that propagation is taken back first, because
+    # -2 already being false satisfies the second resolvent. A checker that
+    # leaves the first block's trail in place accepts the lemma, then derives
+    # the empty clause from it -- against a formula kissat says is SATISFIABLE.
+    r09_cnf = "p cnf 2 3\n-1 2 0\n-1 -2 0\n1 2 0\n"
+    r09_lrat = "4 1 0 -1 3 -2 0\n5 0 4 1 2 0\n"
+
+    # R10. Lemma (-2 -2), which is the clause (-2) written twice, with an empty
+    # hint list. Assigning a literal twice is idempotent, so this is not a
+    # tautology: the second copy is falsified by the first, not satisfied by it.
+    # A checker that reads the repeat as x or not-x accepts the lemma before the
+    # candidate scan happens, and both clauses of a SATISFIABLE formula hold 2.
+    r10_cnf = "p cnf 2 2\n1 2 0\n-1 2 0\n"
+    r10_lrat = "3 -2 -2 0 0\n4 0 3 1 2 0\n"
+
+    # R11. Lemma (2) with prefix hints 1 and 2, then blocks on clauses 3 and 4.
+    # The prefix conflicts on its own, so the lemma is RUP and the blocks can
+    # never be reached. Rejected on part 1's EarlyConflict reasoning; the
+    # formula is UNSATISFIABLE and the lemma sequence is valid, so this fixture
+    # pins a strictness decision rather than a safety property. See the test.
+    r11_cnf = "p cnf 5 4\n1 2 0\n-1 2 0\n-2 5 0\n-2 -5 0\n"
+    r11_lrat = "5 2 0 1 2 -3 -4 0\n6 0 5 3 4 0\n"
+
+    for tag, expected, cnf_text, lrat_text in [
+        ("r09_second_block_needs_its_own_trail", 10, r09_cnf, r09_lrat),
+        ("r10_repeated_literal_is_not_a_tautology", 10, r10_cnf, r10_lrat),
+        ("r11_rat_lemma_that_is_already_rup", 20, r11_cnf, r11_lrat),
+    ]:
+        cnf_path = os.path.join(out, tag + ".cnf")
+        write(cnf_path, cnf_text)
+        write(os.path.join(out, tag + ".lrat"), lrat_text)
+        result = subprocess.run([kissat, "-q", cnf_path], capture_output=True, text=True)
+        if result.returncode != expected:
+            sys.exit("%s: kissat exited %d, expected %d"
+                     % (tag, result.returncode, expected))
+        print("%s: kissat says %s"
+              % (tag, "SATISFIABLE" if expected == 10 else "UNSATISFIABLE"))
+
+
 def find_satisfiable_variant(cnf_text, kissat, out):
     """Flips the sign of one literal, in file order, until the formula is SAT.
 
@@ -684,6 +751,7 @@ def main():
     build_negatives(out, "deletes_originals", args.kissat)
     build_rat_negatives(out, "real_rat_proof")
     build_block_hint_negatives(out, "resolvent_propagates")
+    build_hand_built_rat_negatives(out, args.kissat)
     build_boundaries(out,
                      os.path.join(out, "tiny_unsat.cnf"),
                      os.path.join(out, "tiny_unsat.lrat"),

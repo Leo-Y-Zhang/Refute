@@ -129,5 +129,17 @@ if ! "$drat_trim" "$fixtures/dup_literal.cnf" "$work/dup_literal.drat" \
 fi
 echo "validated dup_literal against drat-trim"
 
+# R11 is the one negative fixture whose proof is not corrupt. Its lemma
+# sequence is valid and Refute rejects it on a strictness rule alone, so the
+# fixture is worth nothing unless the sequence really does refute the formula.
+# Same check the two hand-built positives get: the same lemmas in DRAT form.
+printf '2 0\n0\n' > "$work/r11.drat"
+if ! "$drat_trim" "$fixtures/r11_rat_lemma_that_is_already_rup.cnf" \
+    "$work/r11.drat" | grep -q '^s VERIFIED'; then
+    echo "r11: drat-trim rejected the lemma sequence Refute is strict about" >&2
+    exit 1
+fi
+echo "validated r11 lemma sequence against drat-trim"
+
 echo
 echo "corpus size: $(du -sk "$fixtures" | cut -f1) KB in $(ls "$fixtures" | wc -l) files"

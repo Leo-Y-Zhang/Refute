@@ -23,6 +23,10 @@ not formatting — `b08_crlf` exists specifically to check CRLF handling.
 | `resolvent_propagates` | hand-built, same discipline: the lemma sequence `1 3 0` / `0` is verified by `drat-trim` in DRAT form during generation, and only the hint lists are the author's. The one fixture whose resolvent block has hints to walk |
 | `b17_binary_proof` | the first 64 bytes of `kissat`'s binary DRAT for pigeonhole 5x4, produced by the same command as the rest with `--no-binary` left off. Its first byte is `a`, 0x61, which is what recognises it |
 | `r01`–`r08` | deterministic mutations of `real_rat_proof` and `resolvent_propagates` by `tools/mutate.py`, one per new rejection rule in milestone 1b. Each choice is "the first one that qualifies, in file order", so a re-run reproduces it and the meaning does not drift when the base proof is regenerated |
+| `r09`–`r11` | hand-built by `tools/mutate.py`, one per rule that no mutation of a real proof reaches; each construction site says why. `kissat` is run on all three formulas during generation and the exit code checked, so the satisfiability of each is a solver's claim |
+| `r09_second_block_needs_its_own_trail` | **satisfiable** (`kissat` exit 10). Two resolvent blocks on one lemma, where the second is refuted only once the first block's propagations are taken back. `s VERIFIED` here would be a false accept against a formula with a model |
+| `r10_repeated_literal_is_not_a_tautology` | **satisfiable** (`kissat` exit 10). A lemma written `-2 -2`, which is the clause `-2`, not `x or not-x`. The negative half of `dup_literal`'s and B19's positive coverage |
+| `r11_rat_lemma_that_is_already_rup` | **unsatisfiable** (`kissat` exit 20), and the one negative fixture whose proof is not corrupt: `drat-trim` verifies the same lemma sequence in DRAT form (`2 0` / `0`) during generation. Refute rejects it on the `RatLemmaIsRup` strictness rule alone, so it pins a decision — `docs/TDD.md` part 2, open question 2 — rather than a safety property |
 | `taut_lemma` | `deletes_originals` with one tautological lemma spliced in before the last step |
 | `dup_literal` | `tiny_unsat` with the literal its first propagation depends on written twice, and `tiny_unsat`'s proof unchanged. The clause and the literal are found by `tools/mutate.py`, not chosen; `drat-trim` verifies the same lemma sequence in DRAT form against the edited formula during generation |
 | `empty_clause_in_cnf` | hand-built; `drat-trim` reports "trivial UNSAT" and emits an empty LRAT file, so there is nothing to capture |
@@ -48,6 +52,11 @@ measured across the eleven proofs behind `docs/TDD.md` part 2 are refuted by the
 negation of their own resolvent and carry no hints at all.
 `resolvent_propagates` is built so that one does: three hints, conflict on the
 last. Without it that path ships with no coverage.
+
+The same measurement is why `r09_second_block_needs_its_own_trail` is built
+rather than mutated. A block that propagates nothing leaves nothing behind for
+the next block to inherit, so no real file — and therefore no mutation of one —
+can show whether the trail is taken back between blocks.
 
 **The 8x7 instance reproduces the design's measurement exactly:** 2,747 RUP
 additions, 70 RAT, 56 empty-hint, 1,459 deletions, ids 205 to 3571, and 20,069
