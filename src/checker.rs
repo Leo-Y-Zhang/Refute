@@ -12,6 +12,7 @@ use crate::cnf::{parse_dimacs, Cnf, Warning};
 use crate::limits::Limits;
 use crate::lit::{Clause, ClauseId, Lit};
 use crate::lrat::{Hints, LratReader, Step};
+use crate::parse::ParseErrorKind;
 use crate::verdict::{Reason, Rejection, Unsupported, Verdict};
 
 /// Unassigned.
@@ -190,12 +191,22 @@ impl Checker {
                 Ok(step) => step,
                 // Fail closed: a proof we cannot read is a proof we cannot
                 // accept. The error carries its own line number.
+                //
+                // One kind is answered differently, and it is the only
+                // weakening in this crate: a binary proof is not a bad
+                // certificate, it is the wrong file, and calling it a
+                // rejection is the confusion Refute exists to remove. The kind
+                // is named explicitly and singly, so nothing else can drift
+                // into exit 2, and it has no route to `Verified` at all.
                 Err(err) => {
+                    if matches!(err.kind, ParseErrorKind::BinaryProof) {
+                        return Verdict::Unsupported(Unsupported::BinaryProof { line: err.line });
+                    }
                     return Verdict::NotVerified(Rejection {
                         step: None,
                         line: 0,
                         reason: Reason::Parse(err),
-                    })
+                    });
                 }
             };
             match step {
@@ -238,7 +249,7 @@ impl Checker {
         // running RUP on a lemma whose hints we do not understand would reject
         // a valid proof, and accepting it would accept anything.
         let hints = match hints {
-            Hints::Rat => return Some(Verdict::Unsupported(Unsupported::RatHints { line })),
+            Hints::Rat { .. } => return Some(Verdict::Unsupported(Unsupported::RatHints { line })),
             Hints::Empty => return Some(Verdict::Unsupported(Unsupported::EmptyHints { line })),
             Hints::Rup(hints) => hints,
         };

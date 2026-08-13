@@ -60,6 +60,10 @@ pub enum ParseErrorKind {
     NonPositiveClauseId(String),
     /// Tokens after the terminator that ends a step.
     TrailingTokens(String),
+    /// The proof is binary, not text LRAT. Recognised from the first byte of
+    /// the file, and the one parse error that becomes
+    /// [`crate::verdict::Unsupported`] rather than a rejection.
+    BinaryProof,
 }
 
 /// Text from an input file, on its way into a message a terminal will render.
@@ -117,6 +121,7 @@ impl fmt::Display for ParseErrorKind {
             Self::TrailingTokens(tok) => {
                 write!(f, "unexpected token '{}' after 0 terminator", Escaped(tok))
             }
+            Self::BinaryProof => write!(f, "the proof is binary, not text LRAT"),
         }
     }
 }

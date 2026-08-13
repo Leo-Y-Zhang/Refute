@@ -117,6 +117,16 @@ pub enum Unsupported {
         /// One-based line number in the proof.
         line: u64,
     },
+    /// The proof file is binary, not text LRAT.
+    ///
+    /// `kissat` writes binary DRAT unless it is told `--no-binary`, so this is
+    /// a mistake a user makes rather than a construct nobody meets. Reporting
+    /// it as a corrupt proof — which is what happened before — is a tool
+    /// failure dressed up as a bad certificate.
+    BinaryProof {
+        /// One-based line number in the proof. Always 1.
+        line: u64,
+    },
 }
 
 impl fmt::Display for Unsupported {
@@ -131,6 +141,11 @@ impl fmt::Display for Unsupported {
                 f,
                 "proof line {line}: addition with an empty hint list; milestone 1 checks \
                  RUP hints only. Use drat-trim for RAT proofs until milestone 1b"
+            ),
+            Self::BinaryProof { line } => write!(
+                f,
+                "proof line {line}: this is a binary proof; refute reads text LRAT. \
+                 Re-run kissat with --no-binary, then drat-trim with -L"
             ),
         }
     }

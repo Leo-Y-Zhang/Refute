@@ -436,6 +436,36 @@ fn b17_a_binary_proof_is_unsupported_not_verified() {
     );
 }
 
+/// B17b. The guard on the one weakening in the crate.
+///
+/// Exactly one parse error kind becomes `Unsupported` and exit 2; every other
+/// one stays a rejection and exit 1. The mapping is a rejection turned into a
+/// non-rejection, so it is the place a corrupt proof could learn to look like
+/// an unsupported one.
+#[test]
+fn b17b_only_a_binary_proof_becomes_unsupported() {
+    let formula = "p cnf 2 2\n1 0\n-1 0\n";
+    for proof in [
+        "3 1 0 1\n",              // no terminator
+        "3 1 0 1 0 9\n",          // trailing tokens
+        "not-an-integer 0 0\n",   // not an integer
+        "99999999999999999999\n", // overflow
+        "-1 1 0 1 0\n",           // a step id that is not positive
+        "3 100000000 0 1 0\n",    // a variable past the ceiling
+    ] {
+        let outcome = refute::check_readers(
+            Cursor::new(formula.as_bytes()),
+            Cursor::new(proof.as_bytes()),
+            &Limits::default(),
+        );
+        assert!(
+            matches!(outcome.verdict, Verdict::NotVerified(_)),
+            "{proof:?} produced {:?}",
+            outcome.verdict
+        );
+    }
+}
+
 /// B18. A hint list of resolvent block markers, longer than the ceiling.
 ///
 /// The ceiling bounds the *whole* hint list — prefix, block markers and block

@@ -18,16 +18,42 @@ use crate::parse::{
     scan_i64, scan_id, scan_lit, strip_byte_order_mark, ParseError, ParseErrorKind, Source,
 };
 
+/// One resolvent block: the clause resolved against, and its own hints.
+///
+/// Opened by a negative identifier. Every positive identifier after it, up to
+/// the next negative one or the end of the list, belongs to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolventBlock {
+    /// The clause the lemma is resolved against. Always positive; the sign in
+    /// the file is the marker, not part of the identifier.
+    pub clause: ClauseId,
+    /// The hints for this block's resolvent. Empty in all 703 blocks measured
+    /// for `docs/TDD.md` part 2, because the resolvent's own negation refutes
+    /// it — which is exactly why the walk over them needs a built fixture.
+    pub hints: Vec<ClauseId>,
+}
+
 /// The hint list of an addition step, classified before anything is checked.
+///
+/// Milestone 1 kept only the positive identifiers and threw the rest away, on
+/// the ground that a half-understood hint list is worse than none. They are
+/// fully understood now, so they are all kept.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hints {
     /// Every hint is a positive identifier: a RUP derivation. 96.0 % of
     /// addition lines in the measured corpus.
     Rup(Vec<ClauseId>),
-    /// At least one negative identifier: a RAT resolvent block. 2.4 %.
-    Rat,
-    /// No hints at all, as in `205 57 -29 0 0`. 2.0 %, and neither a pass nor
-    /// a corruption — see [`crate::verdict::Unsupported`].
+    /// At least one negative identifier: a RAT step. 2.4 %.
+    Rat {
+        /// The positive identifiers before the first block, propagated before
+        /// any resolvent is checked. Possibly empty.
+        prefix: Vec<ClauseId>,
+        /// The resolvent blocks, in file order. Never empty in this variant.
+        blocks: Vec<ResolventBlock>,
+    },
+    /// No hints at all, as in `205 57 -29 0 0`. 2.0 %, and a claim rather than
+    /// an absence: it says the lemma's pivot has no resolution candidate. The
+    /// checker establishes that for itself before accepting it.
     Empty,
 }
 
@@ -63,6 +89,7 @@ pub struct LratReader<R: BufRead> {
     limits: Limits,
     line: u64,
     finished: bool,
+    sniffed: bool,
     buffer: String,
 }
 
@@ -74,7 +101,33 @@ impl<R: BufRead> LratReader<R> {
             limits: *limits,
             line: 0,
             finished: false,
+            sniffed: false,
             buffer: String::new(),
+        }
+    }
+
+    /// Recognises a binary proof from its first byte, before any decoding.
+    ///
+    /// Binary DRAT and binary LRAT begin every record with `a` (0x61) or `d`
+    /// (0x64); a text LRAT line always begins with a decimal step identifier,
+    /// and a deletion is `<id> d ...`, so the first byte of a text proof is
+    /// never either of these. `kissat` writes binary unless it is told
+    /// `--no-binary`, which makes this the commonest way to hand a checker
+    /// something it cannot read.
+    ///
+    /// Done on the raw bytes rather than on a decoded line because a binary
+    /// proof need not be valid UTF-8, and a read that fails to decode would
+    /// report an I/O error instead. It is the first byte of the *file*, which
+    /// is narrower than `docs/TDD.md` part 2's "first non-empty line": the
+    /// narrowing can only fail to recognise a binary proof, leaving milestone
+    /// 1's parse error in place, and has no route to a false `VERIFIED`.
+    fn is_binary(&mut self) -> bool {
+        self.sniffed = true;
+        match self.reader.fill_buf() {
+            // A read error here is left to the read below, which reports it
+            // with a line number.
+            Ok(buffered) => matches!(buffered.first(), Some(b'a') | Some(b'd')),
+            Err(_) => false,
         }
     }
 
@@ -91,6 +144,10 @@ impl<R: BufRead> Iterator for LratReader<R> {
         loop {
             if self.finished {
                 return None;
+            }
+            if !self.sniffed && self.is_binary() {
+                self.line = 1;
+                return self.fail(ParseErrorKind::BinaryProof);
             }
             self.buffer.clear();
             match self.reader.read_line(&mut self.buffer) {
@@ -174,22 +231,43 @@ fn parse_step(line: &str, line_no: u64, limits: &Limits) -> Result<Step, ParseEr
         return Err(ParseErrorKind::MissingTerminator);
     }
 
-    let mut positive: Vec<ClauseId> = Vec::new();
-    let mut any_negative = false;
+    let mut prefix: Vec<ClauseId> = Vec::new();
+    let mut blocks: Vec<ResolventBlock> = Vec::new();
+    let mut hint_tokens: usize = 0;
     terminated = false;
     for token in tokens.by_ref() {
         if token == "0" {
             terminated = true;
             break;
         }
+        // The ceiling bounds the hint list as a whole — prefix, block markers
+        // and block hints together — rather than each list inside it. A line
+        // of ten million one-hint blocks allocates what a ten-million-hint
+        // list allocates, and milestone 1 counted only the positives, so that
+        // line was unbounded.
+        if hint_tokens >= limits.max_clause_len {
+            return Err(ParseErrorKind::ListTooLong {
+                limit: limits.max_clause_len,
+            });
+        }
+        hint_tokens = hint_tokens.saturating_add(1);
         let value = scan_i64(token)?;
         if value < 0 {
-            // A RAT resolvent block. The remaining hints are still scanned for
-            // well-formedness, but their values are not kept: milestone 1 does
-            // not check RAT, and a half-understood hint list is worse than none.
-            any_negative = true;
+            // A negative identifier opens a resolvent block. `unsigned_abs`
+            // cannot overflow here: `scan_i64` rejects `i64::MIN` as out of
+            // range, so no new arithmetic reaches the untrusted path. `-0`
+            // scans as zero rather than as a negative, so it is read below as
+            // a hint identifier and rejected there.
+            blocks.push(ResolventBlock {
+                clause: value.unsigned_abs(),
+                hints: Vec::new(),
+            });
         } else {
-            push_bounded(&mut positive, scan_id(token)?, limits)?;
+            let id = scan_id(token)?;
+            match blocks.last_mut() {
+                Some(block) => block.hints.push(id),
+                None => prefix.push(id),
+            }
         }
     }
     if !terminated {
@@ -199,12 +277,14 @@ fn parse_step(line: &str, line_no: u64, limits: &Limits) -> Result<Step, ParseEr
         return Err(ParseErrorKind::TrailingTokens(extra.to_owned()));
     }
 
-    let hints = if any_negative {
-        Hints::Rat
-    } else if positive.is_empty() {
-        Hints::Empty
+    let hints = if blocks.is_empty() {
+        if prefix.is_empty() {
+            Hints::Empty
+        } else {
+            Hints::Rup(prefix)
+        }
     } else {
-        Hints::Rup(positive)
+        Hints::Rat { prefix, blocks }
     };
     Ok(Step::Add {
         id,
