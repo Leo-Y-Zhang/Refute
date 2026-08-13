@@ -352,11 +352,14 @@ or it is a lie by omission.
 
 1. **Ship M1 publicly with `UNSUPPORTED` common, or hold for 1b?** PRD Q1. Changes
    the README's framing, not this design. *Recommendation: ship, loudly limited.*
-2. **`Limits::max_var` default of 2^26 (67M vars, 64 MB assignment vector).** The
-   author's vdW formulas use a few thousand variables. 2^26 is generous; 2^22
-   would be safer for a browser. Needs one decision, and M4 can override it per
-   platform. *Does not block the build — the type exists either way.*
+2. **`Limits::max_var` default of 2^26 (67M vars).** The author's vdW formulas
+   use a few thousand variables. 2^26 is generous; 2^22 would be safer for a
+   browser. **Narrowed after the build:** this no longer decides an allocation
+   on its own. The assignment vector is sized from the largest variable the
+   formula actually mentions, so `max_var` is now only a ceiling on what a
+   literal may be. M4 can still override it per platform.
 3. ~~**`rust-version = "1.74"` is a guess** until CI runs that toolchain.~~
-   **Closed during the build.** The whole suite was run on 1.74.0 locally —
-   42 passed, 0 failed — before the CI job was written, so the floor is
-   measured. CI runs the same leg so it stays measured.
+   **Closed.** The whole suite was run on 1.74.0 locally before the CI job was
+   written, and CI has since run the same leg on Ubuntu and on Windows: 53
+   passed, 0 failed, on `rustc 1.74.0 (79e9716c9 2023-11-13)`. The floor is
+   measured on two operating systems rather than on one machine.
