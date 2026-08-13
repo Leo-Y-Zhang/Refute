@@ -49,6 +49,13 @@ fn strip_comments(source: &str) -> String {
 /// construct one, since `Verdict` has no public constructor, no `Default` and
 /// no `From`. Excluding it is what lets the count be exactly one rather than a
 /// number that grows every time a caller is added.
+///
+/// Both spellings count. Inside `verdict.rs`, `Self::Verified` builds exactly
+/// what `Verdict::Verified` builds anywhere else — `impl Verdict { fn ok() ->
+/// Self { Self::Verified } }` would be a second door, and a grep that knew
+/// only the long form was watching the first one. Reading the variant by its
+/// short name, in a `match` or a `matches!`, trips this as well: a false alarm
+/// rather than a missed one, which is the right way round for this guard.
 #[test]
 fn verified_has_exactly_one_construction_site() {
     let mut files = Vec::new();
@@ -59,7 +66,8 @@ fn verified_has_exactly_one_construction_site() {
     let mut sites = Vec::new();
     for path in &files {
         let code = strip_comments(&fs::read_to_string(path).unwrap());
-        let count = code.matches("Verdict::Verified").count();
+        let count =
+            code.matches("Verdict::Verified").count() + code.matches("Self::Verified").count();
         for _ in 0..count {
             sites.push(path.clone());
         }
@@ -75,6 +83,35 @@ fn verified_has_exactly_one_construction_site() {
         "the single construction site moved to {:?}",
         sites[0]
     );
+}
+
+/// The variant is never imported, in the library or in the binary.
+///
+/// `use crate::verdict::Verdict::Verified;` — or a glob — makes a bare
+/// `Verified` construct it, and every grep in this file would go on reporting
+/// one construction site while any number of them existed. The import is the
+/// hole; this is the test that closes it.
+#[test]
+fn the_verified_variant_is_never_imported() {
+    let mut files = Vec::new();
+    rust_files(&source_root(), &mut files);
+    assert!(!files.is_empty(), "found no sources to scan");
+
+    for path in &files {
+        let code = strip_comments(&fs::read_to_string(path).unwrap());
+        for line in code.lines() {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("use ") && !trimmed.starts_with("pub use ") {
+                continue;
+            }
+            assert!(
+                !line.contains("Verdict::Verified") && !line.contains("Verdict::*"),
+                "{}: importing the variant hides every later construction of it: {}",
+                path.display(),
+                trimmed
+            );
+        }
+    }
 }
 
 /// No route to a verdict that did not come from checking.
