@@ -5,6 +5,18 @@
 //! assert an exit code and the literal strings a downstream script will grep
 //! for. Anything that matters is asserted on both.
 
+// A test asserts by panicking: `unwrap` on a fixture that must open, `panic!`
+// on a verdict that must not happen, indexing a slice an assertion above it
+// just sized. The package's panic floor in Cargo.toml is there for the library
+// and the binary, where a panic on input-derived data is a denial of service.
+// Here it would only make the failure report worse.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+// Each test crate uses a different part of this module.
 #![allow(dead_code)]
 
 use std::fs::File;

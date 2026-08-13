@@ -12,3 +12,26 @@ categories = ["command-line-utilities", "science"]
 # No dependencies, deliberately: see docs/PRD.md, "Not doing / rejected
 # alternatives". Every dependency is a WASM-size and audit cost at milestone 4.
 [dependencies]
+
+# The panic floor belongs to the package, not to the library.
+#
+# While it was a `#![deny]` block in src/lib.rs, the binary inherited nothing:
+# an `unwrap` in src/bin/refute.rs passed `cargo clippy --all-targets -- -D
+# warnings` cleanly. A panic in the CLI is the same denial of service as a
+# panic in the library, and in the milestone-4 WASM target it is a blank page.
+#
+# Test targets lift the clippy half at the top of each file, with the reason
+# written there: an assertion is a panic on purpose. `unsafe_code` is forbidden
+# rather than denied, so nothing can lift it anywhere. `[lints]` needs Cargo
+# 1.74, which is this package's stated minimum, so CI's 1.74.0 leg proves the
+# gate is really in force and not a silently unused manifest key.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"

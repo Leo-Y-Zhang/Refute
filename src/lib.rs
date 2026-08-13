@@ -9,17 +9,13 @@
 //! `docs/PRD.md` for the measurement and what it constrains.
 //!
 //! The library never exits the process, never prints, and never panics on
-//! input-derived data. The `deny` list below is how that is enforced rather
-//! than merely intended: a panic is a denial of service in the milestone-4
-//! WASM target, so it is a build failure here.
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
-#![warn(missing_docs)]
+//! input-derived data. That is enforced rather than merely intended: the
+//! `[lints]` tables in `Cargo.toml` deny `unwrap`, `expect`, indexing, `panic`
+//! and unchecked arithmetic, and forbid `unsafe`. They live in the manifest so
+//! that the binary and the test targets inherit the same floor — as a `deny`
+//! block here they covered this crate alone, and an `unwrap` in the CLI passed
+//! the gate. A panic is a denial of service in the milestone-4 WASM target, so
+//! it is a build failure everywhere.
 
 pub mod checker;
 pub mod cnf;

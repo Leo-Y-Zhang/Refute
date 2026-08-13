@@ -4,6 +4,18 @@
 //! the empty clause. Discipline does not enforce that; a test that reads the
 //! source does. It is crude, and it has caught this class of mistake before.
 
+// A test asserts by panicking: `unwrap` on a fixture that must open, `panic!`
+// on a verdict that must not happen, indexing a slice an assertion above it
+// just sized. The package's panic floor in Cargo.toml is there for the library
+// and the binary, where a panic on input-derived data is a denial of service.
+// Here it would only make the failure report worse.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

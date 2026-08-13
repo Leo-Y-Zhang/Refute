@@ -5,6 +5,18 @@
 //! also match `NOT VERIFIED`; the documented test is on the exit code, and both
 //! are checked here.
 
+// A test asserts by panicking: `unwrap` on a fixture that must open, `panic!`
+// on a verdict that must not happen, indexing a slice an assertion above it
+// just sized. The package's panic floor in Cargo.toml is there for the library
+// and the binary, where a panic on input-derived data is a denial of service.
+// Here it would only make the failure report worse.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
+
 mod common;
 
 /// Nothing was checked, so the exit code is 3 and not 1. Conflating "no proof"
