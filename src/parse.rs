@@ -52,6 +52,14 @@ pub enum ParseErrorKind {
         /// The ceiling in force.
         limit: usize,
     },
+    /// A proof line beyond [`Limits::max_line_bytes`].
+    ///
+    /// Reported before the line is decoded, which is the point of it: every
+    /// other ceiling in this parser applies to something already in memory.
+    LineTooLong {
+        /// The ceiling in force, in bytes.
+        limit: usize,
+    },
     /// A `p` line that was not `p cnf <vars> <clauses>`.
     BadHeader(String),
     /// A second `p` line.
@@ -107,6 +115,9 @@ impl fmt::Display for ParseErrorKind {
                 write!(f, "variable {var} exceeds limit {limit}")
             }
             Self::ListTooLong { limit } => write!(f, "list longer than limit {limit}"),
+            Self::LineTooLong { limit } => {
+                write!(f, "line longer than the {limit} byte limit")
+            }
             Self::BadHeader(line) => {
                 write!(
                     f,

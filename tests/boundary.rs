@@ -563,6 +563,65 @@ fn b21_a_block_cannot_name_clause_zero() {
     assert_eq!(err.line, 1);
 }
 
+/// B22. A proof line longer than `Limits::max_line_bytes`.
+///
+/// The reader promises to stream: a step at a time, with only the clause
+/// database growing. `read_line` buffers a whole line before any ceiling can
+/// apply to what is in it, so until this limit existed the promise was untrue —
+/// a 200 MB proof written on one line peaked at 268.6 MB of working set and
+/// only then failed on `max_clause_len`, having decided its own allocation.
+///
+/// Both sides are asserted, because a bound that also rejects the line below it
+/// is a bound that fails a legal file: exactly `max_line_bytes` is read, and
+/// one byte more is refused. The line ending the file without a newline is
+/// asserted too — it reads one byte fewer than the same line with one, and a
+/// check written on the byte count alone would fail it.
+#[test]
+fn b22_a_proof_line_past_the_byte_ceiling_is_rejected() {
+    const CEILING: usize = 32;
+    let formula = "p cnf 2 2\n1 0\n-1 0\n";
+    let limits = Limits {
+        max_line_bytes: CEILING,
+        ..Limits::default()
+    };
+    // Trailing spaces are trimmed before the line is parsed, so padding
+    // changes its length in bytes and nothing else about it.
+    let step = "3 0 1 2 0";
+    let at_ceiling = format!("{step}{}", " ".repeat(CEILING - step.len()));
+    assert_eq!(at_ceiling.len(), CEILING);
+
+    for proof in [format!("{at_ceiling}\n"), at_ceiling.clone()] {
+        let outcome = refute::check_readers(
+            Cursor::new(formula.as_bytes()),
+            Cursor::new(proof.as_bytes()),
+            &limits,
+        );
+        assert_eq!(
+            outcome.verdict,
+            Verdict::Verified,
+            "a line of exactly the ceiling was refused: {proof:?}"
+        );
+    }
+
+    let over_by_one = format!("{at_ceiling} \n");
+    let outcome = refute::check_readers(
+        Cursor::new(formula.as_bytes()),
+        Cursor::new(over_by_one.as_bytes()),
+        &limits,
+    );
+    match outcome.verdict {
+        Verdict::NotVerified(rejection) => match rejection.reason {
+            Reason::Parse(err) => {
+                assert_eq!(err.source, Source::Proof);
+                assert_eq!(err.kind, ParseErrorKind::LineTooLong { limit: CEILING });
+                assert_eq!(err.line, 1);
+            }
+            other => panic!("expected a parse error, got {other:?}"),
+        },
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+}
+
 /// B13. 100,000 variables, 50,000 steps, generated here rather than committed.
 ///
 /// The thing it catches is a trail unwound by clearing the assignment vector:

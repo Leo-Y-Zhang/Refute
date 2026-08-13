@@ -1,7 +1,14 @@
 //! Streaming LRAT proof parsing.
 //!
 //! The reader yields one step at a time and never holds the file. A 200 MB
-//! proof is read in constant memory; only the clause database grows.
+//! proof is read in memory bounded by [`Limits::max_line_bytes`], one line at
+//! a time; only the clause database grows.
+//!
+//! That bound is enforced rather than assumed. Until it existed the sentence
+//! above said "in constant memory" and was false: `read_line` buffers a whole
+//! line before any ceiling can apply to what is in it, so a 200 MB proof
+//! written on one line peaked at 268.6 MB of working set — measured on the
+//! release binary — and only then failed on `max_clause_len`.
 //!
 //! Parsing is line-oriented, unlike the formula parser. LRAT is
 //! whitespace-delimited on paper, but a step that runs off the end of its line
@@ -9,7 +16,7 @@
 //! truncated proof would mis-parse rather than fail. One step per line, and a
 //! line that does not terminate is an error.
 
-use std::io::BufRead;
+use std::io::{BufRead, Read};
 
 use crate::cnf::io_kind;
 use crate::limits::Limits;
@@ -150,10 +157,29 @@ impl<R: BufRead> Iterator for LratReader<R> {
                 return self.fail(ParseErrorKind::BinaryProof);
             }
             self.buffer.clear();
-            match self.reader.read_line(&mut self.buffer) {
+            // One byte past the ceiling, so that a line of exactly the ceiling
+            // and a line one byte longer are told apart by what was read
+            // rather than by a second look at the reader. Everything the
+            // parser does below happens to a line this call has already
+            // bounded.
+            let ceiling = self.limits.max_line_bytes;
+            let take = u64::try_from(ceiling).unwrap_or(u64::MAX).saturating_add(1);
+            match (&mut self.reader).take(take).read_line(&mut self.buffer) {
                 Ok(0) => {
                     self.finished = true;
                     return None;
+                }
+                // Read the whole allowance and no newline in it: the line runs
+                // past the ceiling. A line of exactly `ceiling` bytes that ends
+                // the file reads `ceiling` bytes, not `ceiling + 1`, so it is
+                // not this case and is accepted.
+                //
+                // A cut through a multi-byte character is reported by
+                // `read_line` as an I/O error instead, which is what any
+                // undecodable byte in the proof already gets. LRAT is ASCII.
+                Ok(_) if self.buffer.len() > ceiling && !self.buffer.ends_with('\n') => {
+                    self.line = self.line.saturating_add(1);
+                    return self.fail(ParseErrorKind::LineTooLong { limit: ceiling });
                 }
                 Ok(_) => {}
                 Err(err) => {
