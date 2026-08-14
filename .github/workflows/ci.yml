@@ -112,3 +112,32 @@ jobs:
       # fixture pair, through the module and through the binary, verdict against
       # verdict. Not --quiet: the table is the evidence, and a tick is not.
       - run: node tools/wasm_agreement.mjs
+
+  # The page, in a real browser.
+  #
+  # Node is not a browser and this milestone's whole surface is the browser, so
+  # the check that matters most for the page cannot run in the harness above.
+  # This job loads every preloaded example in headless Chrome, reads the verdict
+  # out of the DOM and compares it against what the CLI says, and records every
+  # network request the page and its worker make. A request to another origin
+  # fails the build, because "your files are never uploaded" is a property to be
+  # checked and not a sentence to be written.
+  #
+  # It does not cover a phone, and says so: that half of the release gate is
+  # still done by hand.
+  page:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Pinned to a commit, not a tag: a tag is a moving pointer someone
+      # else controls, and this workflow runs on every push.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain with the wasm32 target
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal \
+            --target wasm32-unknown-unknown
+          rustup default 1.97.1
+          rustc --version
+      - run: cargo build --profile release-wasm --target wasm32-unknown-unknown -p refute-wasm
+      - run: cargo build
+      - run: node tools/browser_check.mjs

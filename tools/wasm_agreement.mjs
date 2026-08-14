@@ -45,15 +45,43 @@ const VERDICTS = ['VERIFIED', 'NOT VERIFIED', 'UNSUPPORTED'];
 const REFUSED_CODE = 3;
 
 /**
- * The ceiling the module refuses above, in bytes.
+ * The number this file does not get to choose.
  *
- * The source of truth is `MAX_INPUT_BYTES` in wasm/src/lib.rs; this is the
- * value the page will also have to carry, because the refusal it makes happens
- * before the module is instantiated and so cannot ask the module. The boundary
- * check below is what keeps the two from drifting: it asserts that the module
- * accepts exactly this and refuses exactly one byte more.
+ * The ceiling exists in two places and has to: the page refuses a file before
+ * it instantiates anything, so it cannot ask the module how large a file the
+ * module would hold. So this harness reads both, fails if they disagree, and
+ * then checks that the compiled module really does accept exactly that and
+ * refuse exactly one byte more. Three links, and nothing here is a fourth copy
+ * of the number.
+ *
+ * Comment lines are stripped before matching, and that is not tidiness either.
+ * The same trick caught a guard in `tests/trust_boundary.rs` reading a
+ * manifest's own explanatory comment instead of its setting, and passing while
+ * the setting was wrong.
  */
-const MAX_INPUT_BYTES = 33_554_432;
+function constantFrom(path, pattern, what) {
+  const code = readFileSync(path, 'utf8')
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n');
+  const match = pattern.exec(code);
+  if (match === null) {
+    throw new Error(`could not find ${what} in ${path}`);
+  }
+  return Number(match[1].replaceAll('_', ''));
+}
+
+const PAGE_CEILING = constantFrom(
+  join('page', 'limits.js'),
+  /MAX_INPUT_BYTES\s*=\s*([0-9_]+)/,
+  'MAX_INPUT_BYTES',
+);
+const MODULE_CEILING = constantFrom(
+  join('wasm', 'src', 'lib.rs'),
+  /MAX_INPUT_BYTES:\s*usize\s*=\s*([0-9_]+)/,
+  'MAX_INPUT_BYTES',
+);
+const MAX_INPUT_BYTES = MODULE_CEILING;
 
 function parseArgs(argv) {
   const options = {
@@ -346,6 +374,15 @@ for (const verdict of VERDICTS) {
 function boundary() {
   const results = [];
 
+  if (PAGE_CEILING !== MODULE_CEILING) {
+    failures.push(
+      `page/limits.js says ${PAGE_CEILING} and wasm/src/lib.rs says ` +
+        `${MODULE_CEILING}. The page refuses before it instantiates anything, ` +
+        'so the two numbers have to be the same one written twice, and this ' +
+        'is the only thing keeping them that way.',
+    );
+  }
+
   const overInstance = new WebAssembly.Instance(
     new WebAssembly.Module(moduleBytes),
     {},
@@ -402,7 +439,7 @@ function boundary() {
 }
 
 console.log('');
-console.log(`ceiling         ${MAX_INPUT_BYTES} bytes per input`);
+console.log(`ceiling         ${MAX_INPUT_BYTES} bytes per input (page and module agree)`);
 for (const line of boundary()) {
   console.log(`  ${line}`);
 }
