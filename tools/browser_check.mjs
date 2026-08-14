@@ -98,7 +98,6 @@ FAIL  the browser check did not finish within ${WATCHDOG_MS} ms. ` +
   );
   process.exit(1);
 }, WATCHDOG_MS);
-watchdog.unref?.();
 
 /** What the script is waiting on, for the watchdog to name. */
 let stage = 'startup';
@@ -145,11 +144,27 @@ class Devtools {
     return new Devtools(socket);
   }
 
-  send(method, params = {}, sessionId = undefined) {
+  /**
+   * Sends one command and waits for its reply, but not forever.
+   *
+   * A reply that never comes is exactly what a closed target, a detached
+   * session or a dead socket produces, and an unbounded await on one is how
+   * this check spent two CI jobs sitting still. The timeout resolves rather
+   * than rejects, so a caller gets `null` and the run carries on to report
+   * something.
+   */
+  send(method, params = {}, sessionId = undefined, timeoutMs = 30000) {
     const id = this.nextId;
     this.nextId += 1;
     return new Promise((resolve) => {
-      this.pending.set(id, resolve);
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve(null);
+      }, timeoutMs);
+      this.pending.set(id, (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      });
       const message = { id, method, params };
       if (sessionId !== undefined) {
         message.sessionId = sessionId;
@@ -169,6 +184,9 @@ class Devtools {
       returnByValue: true,
       awaitPromise: true,
     });
+    if (reply === null) {
+      throw new Error(`the page never answered ${expression}`);
+    }
     if (reply.result?.exceptionDetails !== undefined) {
       throw new Error(
         `evaluating in the page threw: ${reply.result.exceptionDetails.text}`,
@@ -182,15 +200,31 @@ class Devtools {
   }
 }
 
+/**
+ * Polls until the predicate gives something, or the deadline passes.
+ *
+ * The deadline is raced against the predicate rather than checked after it.
+ * Checked after, a predicate that hangs makes the whole loop hang and the
+ * timeout becomes decorative - which is what it was, and it is why a job that
+ * had a thirty-second budget per example ran for fifteen minutes.
+ */
 async function until(predicate, { timeoutMs = 60000, everyMs = 100 } = {}) {
   const deadline = Date.now() + timeoutMs;
+  const expired = Symbol('expired');
   for (;;) {
-    const value = await predicate();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return null;
+    }
+    const value = await Promise.race([
+      Promise.resolve().then(predicate).catch(() => null),
+      sleep(remaining).then(() => expired),
+    ]);
+    if (value === expired) {
+      return null;
+    }
     if (value !== null && value !== undefined && value !== false) {
       return value;
-    }
-    if (Date.now() > deadline) {
-      return null;
     }
     await sleep(everyMs);
   }
@@ -251,6 +285,11 @@ function shutdown() {
   }
 }
 
+// A backstop, not the plan. `exit` only fires once the event loop is empty,
+// and a listening server is exactly what keeps it from being — so relying on
+// this alone deadlocked: the check printed its whole report and then sat there
+// holding the CI step open, having already decided the answer. `shutdown()` is
+// called explicitly on both paths below.
 process.on('exit', shutdown);
 
 // The debugging port takes a moment to answer.
@@ -445,6 +484,7 @@ if (failures.length > 0) {
     console.error(`FAIL  ${failure}`);
   }
   devtools.close();
+  shutdown();
   process.exit(1);
 }
 clearTimeout(watchdog);
@@ -452,3 +492,4 @@ console.log('');
 console.log('every example reported the verdict the CLI reports');
 console.log('every request stayed on this page\'s own origin');
 devtools.close();
+shutdown();
