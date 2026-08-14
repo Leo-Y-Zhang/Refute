@@ -2945,7 +2945,11 @@ now, and fails if it never sees the module fetched at all.
 ### What is not done
 
 - **Rollback step 2's phone half.** No phone has been measured, and open
-  question 1 should be answered after it rather than before.
+  question 1 should be answered after it rather than before. There is now a
+  route that does not require publishing first: `tools/serve_page.mjs --lan`
+  binds every interface and prints an address a phone on the same network can
+  open. WebAssembly and workers both run over plain HTTP, so no certificate is
+  involved, and the gate keeps the order it is written in.
 - **Step 10.** The page is not published and the README does not link it.
   Publishing is the owner's, from the Actions tab, and enabling Pages in the
   repository settings is a separate act that is also the owner's.

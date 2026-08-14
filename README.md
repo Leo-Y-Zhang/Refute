@@ -335,6 +335,11 @@ node tools/serve_page.mjs
 Then open the address it prints. `file://` will not do: a page cannot start a
 worker or fetch a sibling from it.
 
+`--lan` binds every interface and prints the addresses a phone on the same
+network can reach, which is how the page gets measured on a phone before it is
+published rather than after. Loopback is the default; opening a port to the
+network should be something someone typed on purpose.
+
 The module is **73,165 bytes**, has no dependencies, and **imports nothing at
 all** — which is the mechanism behind the one claim the page makes about
 itself. A module with no imports cannot call out, because there is nothing to
