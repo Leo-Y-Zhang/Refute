@@ -34,7 +34,11 @@ jobs:
           rustc --version
           cargo clippy --version
       - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets -- -D warnings
+      # `--workspace` since milestone 4: the export boundary lives in a second
+      # crate, and a gate that stopped at the package in the current directory
+      # would have stopped watching the one file in this repository that
+      # `unsafe_code = "forbid"` does not cover.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   # The test runner is deliberately not pinned: `stable` is what a reader will
   # have. 1.74.0 runs the same suite so that rust-version in Cargo.toml is a
@@ -56,7 +60,7 @@ jobs:
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal
           rustup default ${{ matrix.toolchain }}
           rustc --version
-      - run: cargo test --no-fail-fast
+      - run: cargo test --workspace --no-fail-fast
       # Fixtures are byte-exact evidence. If a checkout ever translates their
       # line endings, b08_crlf silently stops testing CRLF and starts testing
       # whatever the platform produced. This is the check that says so.
@@ -69,3 +73,34 @@ jobs:
               exit 1
             fi
           done
+
+  # The module the playground will load. Built in CI so that a change which
+  # compiles for the host but not for wasm32 is caught by the push that made
+  # it, rather than by whoever next tries to publish a page.
+  #
+  # `std` for wasm32-unknown-unknown is a rustup component rather than part of
+  # the toolchain, so this job installs the target explicitly. Both toolchains
+  # build it, which is what keeps `rust-version` a claim about the whole
+  # workspace and not only about the part of it that runs on a desktop.
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, 1.74.0]
+    steps:
+      # Pinned to a commit, not a tag: a tag is a moving pointer someone
+      # else controls, and this workflow runs on every push.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install ${{ matrix.toolchain }} with the wasm32 target
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal \
+            --target wasm32-unknown-unknown
+          rustup default ${{ matrix.toolchain }}
+          rustc --version
+      - run: cargo build --profile release-wasm --target wasm32-unknown-unknown -p refute-wasm
+      # Three exports, one memory, and no imports whatsoever. The last is the
+      # mechanism behind the playground's privacy claim, and a mechanism is
+      # worth asserting where a promise is not.
+      - run: node tools/wasm_shape.mjs

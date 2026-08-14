@@ -1,3 +1,26 @@
+# Two crates, one lockfile. The second one carries nothing but the WebAssembly
+# export boundary, because `unsafe_code = "forbid"` below blocks every form an
+# export can take — measured, all three of them, in docs/TDD.md part 5.
+[workspace]
+members = [".", "wasm"]
+
+# The module the playground loads gets a profile of its own rather than a
+# `[profile.release]` here.
+#
+# Profiles live in the workspace root whatever crate they are for, so tuning
+# the release profile for a 73 KB WebAssembly module would silently have
+# re-optimised the CLI as well — and every peak-memory and wall-clock figure in
+# part 4 was measured on the release binary as it is built today. A named
+# profile is selected explicitly or not at all.
+#
+#     cargo build --profile release-wasm --target wasm32-unknown-unknown -p refute-wasm
+[profile.release-wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true
+
 [package]
 name = "refute"
 version = "0.1.0"

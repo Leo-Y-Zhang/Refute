@@ -5,3 +5,10 @@ version = 3
 [[package]]
 name = "refute"
 version = "0.1.0"
+
+[[package]]
+name = "refute-wasm"
+version = "0.1.0"
+dependencies = [
+ "refute",
+]

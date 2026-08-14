@@ -23,6 +23,20 @@ fn source_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
+/// The whole Rust surface of the milestone-4 playground.
+///
+/// It lives in a second crate for one reason, and these tests are that reason
+/// written down: `unsafe_code = "forbid"` in this package blocks every
+/// WebAssembly export form, so the export boundary had to move somewhere the
+/// lint is not `forbid`. Somewhere is not nowhere. The guards below watch that
+/// boundary from here, inside `cargo test`, which CI already runs on four legs.
+fn wasm_source() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("wasm")
+        .join("src")
+        .join("lib.rs")
+}
+
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -219,5 +233,91 @@ fn the_cli_match_on_verdict_has_no_wildcard_arm() {
     assert!(
         !region.contains("_ =>"),
         "the verdict match must stay exhaustive"
+    );
+}
+
+/// The checker crate still forbids `unsafe`, which is the property the second
+/// crate exists to protect.
+///
+/// If this ever has to be relaxed to make the playground build, the playground
+/// was built the wrong way. `forbid` cannot be lifted by an `allow` anywhere
+/// beneath it, which is the whole difference between it and `deny` and the
+/// reason the word is asserted here literally.
+///
+/// The comment lines go first, and that is not tidiness. The first version of
+/// this test searched the whole file, and the manifest's own comment explains
+/// why the second crate exists — in a sentence containing `unsafe_code =
+/// "forbid"` in backticks. Relaxing the setting to `deny` left the test green,
+/// because it was reading the explanation rather than the rule. A guard that
+/// passes on the prose describing what it guards is not a guard.
+#[test]
+fn the_checker_crate_still_forbids_unsafe() {
+    let manifest =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+    let settings: Vec<&str> = manifest
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    assert!(
+        settings.contains(&"unsafe_code = \"forbid\""),
+        "the checker package must forbid unsafe_code; milestone 4 moved the \
+         export boundary into a second crate precisely so that it could"
+    );
+}
+
+/// The wrapper carries no `unsafe` block, function, trait or impl.
+///
+/// `#[no_mangle]` is `unsafe_code` to the lint, so the wrapper cannot forbid
+/// it and a reader has no manifest line to check. What the wrapper *can* do is
+/// contain no `unsafe` of its own: `Vec::as_ptr` is safe, and the dereference
+/// happens in JavaScript, which is JavaScript's business. This is the test that
+/// says that stays true.
+#[test]
+fn the_wasm_wrapper_contains_no_unsafe_block() {
+    let source = fs::read_to_string(wasm_source()).unwrap();
+    let code = strip_comments(&source);
+    for forbidden in ["unsafe {", "unsafe fn", "unsafe impl", "unsafe trait"] {
+        assert!(
+            !code.contains(forbidden),
+            "the wrapper must contain no `{forbidden}`: the export boundary is \
+             safe Rust, and a pointer handed out is not a pointer trusted in"
+        );
+    }
+}
+
+/// The wrapper maps verdicts in one exhaustive match, like the CLI.
+///
+/// The failure this prevents is the worst one available to this milestone: a
+/// wildcard arm that reports a verdict the checker did not give. `0` is
+/// `VERIFIED` at this boundary, and a page that prints it wrongly discredits
+/// every other verdict the project has ever produced.
+#[test]
+fn the_wasm_verdict_match_has_no_wildcard_arm() {
+    let source = fs::read_to_string(wasm_source()).unwrap();
+    let code = strip_comments(&source);
+    let arm = code
+        .find("Verdict::Verified =>")
+        .expect("the wrapper should match Verdict::Verified explicitly");
+    let start = code
+        .get(..arm)
+        .unwrap()
+        .rfind("match ")
+        .expect("the Verified arm should sit inside a match");
+    let region = code.get(start..).unwrap();
+
+    for variant in [
+        "Verdict::Verified",
+        "Verdict::NotVerified",
+        "Verdict::Unsupported",
+    ] {
+        assert!(
+            region.contains(variant),
+            "the wrapper's verdict match must handle {variant} explicitly"
+        );
+    }
+    assert!(
+        !region.contains("_ =>"),
+        "the wrapper's verdict match must stay exhaustive"
     );
 }
