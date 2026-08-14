@@ -28,10 +28,15 @@ use refute::cnf::Warning;
 use refute::{Limits, Verdict};
 
 pub fn fixture(name: &str) -> PathBuf {
+    fixtures_dir().join(name)
+}
+
+/// The committed corpus itself, for the tests that are about the corpus
+/// rather than about one file in it.
+pub fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join(name)
 }
 
 /// Checks a fixture pair through the library.
@@ -41,13 +46,14 @@ pub fn verdict(cnf: &str, proof: &str) -> Verdict {
 
 /// Checks a fixture pair through the library, keeping everything it produced.
 pub fn outcome(cnf: &str, proof: &str) -> refute::Outcome {
+    outcome_with_limits(cnf, proof, &Limits::default())
+}
+
+/// The same, under limits the caller chooses.
+pub fn outcome_with_limits(cnf: &str, proof: &str, limits: &Limits) -> refute::Outcome {
     let formula = File::open(fixture(cnf)).unwrap();
     let proof = File::open(fixture(proof)).unwrap();
-    refute::check_readers(
-        BufReader::new(formula),
-        BufReader::new(proof),
-        &Limits::default(),
-    )
+    refute::check_readers(BufReader::new(formula), BufReader::new(proof), limits)
 }
 
 /// Checks a fixture pair through the library, keeping the formula's warnings.
