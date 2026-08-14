@@ -303,3 +303,55 @@ input → Check → verdict panel, which receives focus and is an
 keyboard. Verdict is never conveyed by colour alone: the word `VERIFIED` /
 `NOT VERIFIED` / `UNSUPPORTED` is always present in text, with a shape (check /
 cross / dash) beside it.
+
+---
+
+## Part 2b — what the milestone-4 probe changed about part 2 (2026-08-14)
+
+Part 2 was written before anything was built. A throwaway WASM module and a
+Node harness now exist — see `docs/TDD.md` part 5 — and three of its rows can
+stop being predictions.
+
+### The "memory exceeded" row is now a number
+
+Part 2 says a 200 MB proof will not check in a tab and that a retry button
+would be a lie. Measured, per rung: peak linear memory is roughly the proof
+plus the store plus a megabyte, so the a(4) rung the page preloads takes
+**8.4 MB**, and the a(7) rung takes **124.9 MB** of which 83.4 MB is the file
+itself.
+
+The page therefore **refuses above 32 MB of proof, before it instantiates
+anything**, rather than discovering the problem by dying. That is the honest
+version of the same row: the refusal is a decision the page makes with the file
+size in hand, not a crash it reports afterwards.
+
+### "Checking" has a real duration now
+
+WASM is **1.21x** slower than the native binary, not the order of magnitude a
+sandbox is often assumed to cost. The preloaded a(4) rung is **0.85 s**, which
+is fast enough that the progress indicator part 2 specifies is for honesty
+rather than for patience — and slow enough that it must exist.
+
+The Web Worker in part 2 stays, and for a reason the measurement sharpened: at
+32 MB of proof the check is a few seconds, and a few seconds of frozen tab is
+the difference between a tool and a toy.
+
+### One new rule, in the glue rather than the design
+
+**Growing linear memory detaches every `ArrayBuffer` view of it.** The page must
+take the pointer from a reserve call *first* and read `memory.buffer` *second*,
+and must never cache a `Uint8Array` across an export call. Written down here
+because the probe's own harness got it wrong and failed with a `TypeError` on a
+line that looked correct.
+
+And **one instance per check**: `memory.grow` has no inverse, so linear memory
+is a high-water mark that only a dropped instance reclaims. Checking two proofs
+on one instance charges the second for the first.
+
+### What does not change
+
+Every entry point, every state, every dead end, the permissions row and the
+accessibility path are as part 2 wrote them. The privacy claim in particular is
+unchanged and now has a mechanism behind it: the module has **no imports at
+all**, so it cannot call out, and a `Content-Security-Policy` restricted to the
+page's own origin makes the network tab the proof rather than the promise.

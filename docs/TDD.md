@@ -2426,3 +2426,338 @@ experiment got.
    counter would be a second implementation of the same idea over a different
    database. Proposed: no, and the `--stats` line stays DRAT-only, as part 3's
    does. *Not a blocker; one commit either way.*
+
+# Part 5 — milestone 4: the playground
+
+**Status:** draft · **Date:** 2026-08-14 · **Supersedes:** nothing. No
+acceptance rule in parts 1 to 4 moves, and the checker crate is not edited at
+all. This milestone adds a second crate, a page, and a build step.
+
+## The measurement, first — and it answered part 4's open question
+
+Same discipline as parts 1 to 4. The artefact was built and profiled before a
+single line of design was written, and it settled three things the roadmap row
+could only guess at: whether the library compiles to WebAssembly, whether it
+agrees with itself when it does, and what a browser tab actually has to hold.
+
+### The artefact, and how to rebuild it
+
+A throwaway crate outside this repository, depending on `refute` by path, built
+as a `cdylib` for `wasm32-unknown-unknown` with `opt-level = "z"`, `lto = true`,
+`panic = "abort"` and `strip = true`, and driven by a Node harness that
+instantiates the module, writes the two files into linear memory and calls one
+export. Nothing from it is committed; it is a few minutes of work and a
+re-measurable gate rather than a stored artefact.
+
+    rustup target add wasm32-unknown-unknown
+    cargo build --release --target wasm32-unknown-unknown
+
+### What compiles, and the one thing that does not
+
+**`unsafe_code = "forbid"` blocks every WebAssembly export form.** Measured on
+a minimal crate carrying only that lint, all three forms, all three refused:
+
+| form | result |
+|---|---|
+| `#[no_mangle] pub extern "C" fn` | **blocked**, 2 errors |
+| `#[export_name = "..."] pub extern "C" fn` | **blocked**, 2 errors |
+| `pub unsafe extern "C" fn` | **blocked**, 2 errors |
+
+This is the milestone's central constraint and it was not in the roadmap. The
+obvious readings are both bad: relaxing `forbid` to `deny` weakens a property
+the README states about the checker, and taking `wasm-bindgen` breaks the
+no-dependency rule the PRD sets and ships its own `unsafe` besides.
+
+**Neither is necessary.** The export boundary goes in a *second crate* that
+depends on `refute`. `refute` keeps `unsafe_code = "forbid"` untouched, and the
+wrapper needs **no `unsafe` of its own either**: `Vec::as_ptr` is safe, and the
+dereference happens in JavaScript, which is JavaScript's business. Built and
+measured:
+
+| | |
+|---|---:|
+| module, three exports, no dependencies | **73,699 bytes** |
+| `unsafe` blocks in the wrapper | **0** |
+| `unsafe_code` in `refute` | unchanged, still `forbid` |
+
+### It agrees with the native checker
+
+Eight fixture pairs through the WASM module under Node, against the verdict the
+native binary gives. All eight match, and they cover all three verdicts —
+`VERIFIED`, `NOT VERIFIED` and `UNSUPPORTED` — because a playground that
+collapsed the three-way verdict would be a different tool wearing this one's
+name.
+
+`HashMap` also works, which was not obvious: it seeds `RandomState` from the
+platform, and `wasm32-unknown-unknown` has no platform. It does not trap. That
+matters because `Store::bykey` is a `HashMap` and the DRAT path is unusable
+without it.
+
+### The memory profile, up the ladder
+
+Peak linear memory, read as `memory.buffer.byteLength` after the run, on a
+fresh instance per artefact:
+
+| rung | proof | peak | store | wasm |
+|---|---:|---:|---:|---:|
+| a(0), n=18 | 0.0 MB | 1.2 MB | 0.0 MB | 0.00 s |
+| a(2), n=25 | 0.1 MB | 1.7 MB | 0.4 MB | 0.02 s |
+| **a(4), n=33** | **2.4 MB** | **8.4 MB** | **2.2 MB** | **0.85 s** |
+| a(5), n=36 | 7.7 MB | 19.7 MB | 4.3 MB | 3.39 s |
+| a(6), n=40 | 14.9 MB | 31.8 MB | 7.6 MB | 7.48 s |
+| a(7), n=42 | 83.4 MB | **124.9 MB** | 19.6 MB | 62.03 s |
+
+Two things fall straight out of it.
+
+**Peak is roughly the proof plus the store plus a megabyte**, and the proof is
+the larger term on every rung above a(2). The native CLI streams the proof from
+a file and holds one line; a page has to put the whole file in linear memory
+before the checker can read it. That is the whole difference between 19.6 MB
+and 124.9 MB on the a(7) rung.
+
+**So 64 MB is the right native budget and the wrong browser one**, which is
+part 4's open question 1 answered by measurement rather than by taste. It is
+not a matter of picking a larger number: the browser figure is set by the file
+the user drops, not by the checker, and the checker's own share is what
+milestone 3 already bounded.
+
+### Linear memory never comes back
+
+`memory.grow` has no inverse. There is no `memory.shrink`, so
+`buffer.byteLength` **is** the high-water mark of the whole run, and a page that
+frees everything still holds every page it ever touched until the instance is
+dropped.
+
+Two consequences, and both are design input rather than trivia. A fresh
+instance per check is not hygiene, it is how memory is reclaimed at all. And
+milestone 3's reclamation matters *more* here than it does natively, because a
+transient peak is permanent for the life of the instance.
+
+### What milestone 3 is worth in a browser
+
+Measured on the a(6) rung, same instance shape, only the compaction floor
+changed:
+
+| floor | peak | wasm |
+|---|---:|---:|
+| default, 1024 | **31.8 MB** | 7.48 s |
+| never compact | 42.8 MB | 7.38 s |
+| zero | 31.8 MB | 7.24 s |
+
+**11 MB of a browser tab, for no time.** Milestone 3 was justified on a native
+peak working set; it pays again here, and this is the measurement that says so.
+
+### Speed
+
+The a(7) rung takes 62.03 s in WASM against 51.1 s native: **1.21x**. The a(6)
+rung is 7.48 s against 6.35 s, which is 1.18x. A slowdown of about a fifth is
+the price of the sandbox, and it is small enough that the page's problem is
+memory and attention span rather than throughput.
+
+*Recorded because it was nearly wrong in a document: the first version of the
+harness timed `check()` and `store_bytes()` together, and `store_bytes()`
+re-runs the whole check. It reported 2.3x. Every figure in this section comes
+from a harness that times one call.*
+
+### The other defect the probe found, which belongs in the page's contract
+
+**Growing linear memory detaches every `ArrayBuffer` view of it.** JavaScript
+evaluates arguments left to right, so
+
+    new Uint8Array(ex.memory.buffer, ex.cnf_reserve(len), len)   // WRONG
+
+reads the buffer, then grows the memory, then hands `Uint8Array` a detached
+corpse — a `TypeError` at a line that looks correct. The pointer must be taken
+first and the buffer read second, after every call that can allocate. This is
+not a footnote: it is the single most likely defect in the glue, it fails
+loudly rather than silently, and the test plan below pins it.
+
+## The budget, stated
+
+**1. The gate artefact.** The PRD's milestone-4 gate is that a preloaded
+small-rung certificate checks in the browser, with the ~2.5 MB a(4) rung as the
+demonstration. Measured: **8.4 MB of linear memory and 0.85 s.** That fits a
+phone with room to spare, and the gate is met by the code as it already stands.
+
+**2. The ceiling, where the page must refuse.** Stated as an input size rather
+than as a total, because the input is what the user chooses and the rest is a
+consequence:
+
+    peak ~= proof bytes + formula bytes + store + ~1 MB
+
+with `store` bounded by part 4. **The page refuses above 32 MB of proof**, which
+the ladder puts at about 48 MB of peak — comfortably inside a desktop tab and
+honest on a phone. Above that it says so and names the CLI, which is the
+`Memory exceeded` row App Flow part 2 already specifies and the one failure that
+must not offer a retry.
+
+**3. What the budget is not.** It is not a promise about `WebAssembly.Memory`
+maxima, which differ per browser, per platform and per amount of free RAM, and
+which this project has not measured on a phone. The refusal above is set from
+*our* numbers and deliberately far below any published engine limit, so that the
+page is wrong in the direction of refusing something it could have checked.
+
+## Data model
+
+No database, no storage, no cookies, no `localStorage`. The repository gains a
+workspace and one crate.
+
+| Item | Change | Why |
+|---|---|---|
+| root `Cargo.toml` | becomes a workspace listing `.` and `wasm/` | Two crates, one lockfile, one `cargo test` |
+| `wasm/` — new crate `refute-wasm` | `cdylib`, depends on `refute` by path, no other dependencies | Carries the export boundary so `refute` keeps `unsafe_code = "forbid"` |
+| `wasm/src/lib.rs` | three exports and two `thread_local` buffers | The whole Rust surface of the playground |
+| `page/` — new directory | one HTML file, one JS module, one CSS file, no framework | App Flow part 2's screens |
+| `refute` crate | **unchanged** | The property this layout exists to protect |
+
+**The wrapper holds the input, not the caller.** `cnf_reserve(len)` and
+`proof_reserve(len)` size a `thread_local` `Vec<u8>` and return its offset;
+JavaScript writes into linear memory at that offset; `check()` reads them as
+slices. No pointer is passed *in*, so no export takes a pointer it would have to
+trust, which is why none of them needs `unsafe`.
+
+## Interfaces
+
+```rust
+// wasm/src/lib.rs — the entire public surface
+#[no_mangle] pub extern "C" fn cnf_reserve(len: usize) -> usize;
+#[no_mangle] pub extern "C" fn proof_reserve(len: usize) -> usize;
+/// 0 verified, 1 not verified, 2 unsupported, 3 refused as too large.
+#[no_mangle] pub extern "C" fn check() -> u32;
+```
+
+Three functions, one integer each way. Everything richer — the failing step, the
+line, the reason text — is milestone 4's *second* commit and arrives the same
+way the CLI's does: a length-prefixed UTF-8 buffer the page reads out of linear
+memory at an offset the module returns. The three above are what the gate needs
+and they are deliberately shipped first, because a page that reports a verdict
+correctly and says nothing else is useful, and a page that reports a verdict
+*incorrectly* is worse than no page at all.
+
+**The glue contract**, stated because the probe broke it:
+
+1. Call the reserve export. **Then** read `instance.exports.memory.buffer`.
+2. Never cache a `Uint8Array` across any export call.
+3. One instance per check. Instantiate, use, drop.
+
+## Access control
+
+There is none, and that is the design: no accounts, no session, no network, no
+storage. The privacy claim App Flow part 2 makes — *your files are never
+uploaded* — has to be literally true and checkable by a reader.
+
+| Attack | Vector | Control |
+|---|---|---|
+| The claim is false | A font, a script or an error reporter from a third-party origin | Everything is same-origin and committed: no CDN, no analytics, no telemetry, no web font. A `Content-Security-Policy` meta tag with `default-src` set to self makes the network tab the proof |
+| A malicious proof exhausts the tab | A file larger than the ceiling, or one line with no newline in it | The size refusal above, before instantiation; and `Limits::max_line_bytes` inside, unchanged from part 2 |
+| A malicious proof takes the tab hostage | A proof that checks for minutes | A Web Worker, so the tab never freezes, and a cancel control that terminates the worker. App Flow part 2 already specifies both |
+| A proof escapes the sandbox | — | The module has no imports at all. It cannot call out, because there is nothing to call |
+
+## Migrations
+
+None; there is no database. The equivalents table gains one row.
+
+| # | Change | Reversible? | Rollback |
+|---|---|---|---|
+| 10 | Workspace, `refute-wasm` crate, `page/`, a Pages workflow | Yes | Delete the crate and the directory; `refute` is untouched, so the CLI cannot be affected by any of it |
+
+## Failure modes
+
+| What breaks | Who notices | How we detect it | How we undo it |
+|---|---|---|---|
+| **The page reports a verdict the CLI does not** — the serious one | Nobody, and it discredits every other verdict | The Node harness runs the *committed corpus* through the module and compares against the same expectations `tests/` asserts. In CI, because Node is on the runner and the module is buildable there | Take the page down; the CLI is unaffected |
+| A panic in the checker becomes a trap | The user, as a blank page | `panic = "abort"` makes it a trap; the glue catches it at the call boundary and reports an internal error, never a verdict | — |
+| Out of memory mid-check | The user, as a trap with no explanation | The size refusal happens *before* instantiation, so the common case never gets there. A trap after that is reported as the memory message, with the CLI command | Lower the ceiling |
+| The glue caches a detached buffer | The user, as a `TypeError` | A harness case that reserves twice with a grow in between | One line |
+| WASM is blocked or unsupported | The user | Feature-detected before the fetch; the panel links to the CLI | — |
+| The module and the CLI drift apart | Nobody | The module is built from the same crate in the same workspace; a version skew is a build failure, not a wrong answer | — |
+
+## Rollback
+
+`git revert` and a Pages redeploy, under a minute. The checker crate is not
+touched by this milestone, so nothing here can change a CLI verdict.
+
+The irreversible act is **publishing a page that gives verdicts**, and the order
+is:
+
+1. the module's verdicts match the CLI on the whole committed corpus, in CI;
+2. the a(4) rung checks in a real browser — not only in Node — on a desktop and
+   on a phone, with the peak memory recorded;
+3. the privacy claim verified from the network tab, with no request but the page
+   and its own assets;
+4. *then* the page goes up, and *then* the README links it.
+
+Node is not a browser, and this milestone's whole surface is the browser. Step 2
+is not a formality.
+
+## Test plan
+
+Framework unchanged for the checker: `cargo test` stays exactly as it is, and
+the workspace must not change a single existing test. New, and all of it in the
+harness rather than in `tests/`:
+
+### Agreement — the only test that really matters
+
+| # | Input | Asserts |
+|---|---|---|
+| W1 | Every committed `.cnf`/`.drat` and `.cnf`/`.lrat` pair | The module's verdict equals the native checker's, pair by pair. This is the corpus `tests/positive.rs`, `negative.rs` and `drat.rs` already pin, so the expectations are not written twice |
+| W2 | The three verdict kinds | At least one of each, so a module that collapsed `UNSUPPORTED` into `NOT VERIFIED` fails |
+| W3 | The a(4) rung, from a directory passed in | Verifies, and its peak memory is recorded in the table above |
+
+### Boundary
+
+| # | Input | Expected |
+|---|---|---|
+| W4 | Reserve, grow, reserve again, then read the first buffer | The harness re-reads `memory.buffer` and succeeds. The point is that the *documented* glue order is the one exercised |
+| W5 | A proof one byte over the ceiling | Refused before instantiation, with the CLI message. No trap |
+| W6 | A zero-length formula and a zero-length proof | The same verdict the CLI gives, which is `NOT VERIFIED` with `NoEmptyClause` |
+| W7 | A binary proof | `UNSUPPORTED`, and the panel says how to re-run `kissat` |
+| W8 | Two checks in one page load | Two fresh instances; the second's peak is its own, not the sum |
+
+### Not tested here, and named
+
+Browser rendering, drag and drop, and the accessibility path in App Flow part 2
+are not covered by a Node harness, and they are step 2 of the rollback order
+above. Saying which part of a gate a harness does not reach is the same rule
+part 4's fuzz coverage counter follows.
+
+## Build order
+
+1. Branch `design/milestone-4`. Documents only: this part, the PRD's
+   milestone-4 section, the App Flow delta. **Commit.**
+2. The workspace and the `refute-wasm` crate with the three exports. `cargo
+   test` unchanged and green; `cargo build --target wasm32-unknown-unknown`
+   produces the module. No page yet.
+3. The Node harness and W1–W3, run against the committed corpus. **This is the
+   commit that makes the milestone honest**; everything after it is interface.
+4. The size refusal and W5.
+5. The page: HTML, one JS module, CSS, no framework. Feature detection, the Web
+   Worker, the cancel control.
+6. W4 and W6–W8.
+7. The Pages workflow, publishing from a build artefact rather than committing
+   the `.wasm`.
+8. Rollback step 2: a real browser, desktop and phone, peaks recorded.
+9. Rollback step 3: the network tab, with the result written down.
+10. *Then* the page goes live, and *then* the README links it. Stop; publishing
+    is the owner's.
+
+## Open questions
+
+1. **Is 32 MB of proof the right refusal?** It is set from this project's own
+   ladder and deliberately far below any engine limit, because the failure it
+   prevents is a tab dying with no explanation. The number a phone can really
+   take has not been measured — that is rollback step 2 — and this question
+   should be answered *after* it rather than before. **Blocks calling the
+   milestone done, not starting it.**
+2. **Which certificate does the page preload?** The PRD's answer names the
+   A217236 a(4) rung at ~2.5 MB. The artefact measured here is the **A217058**
+   a(4) rung, which is 2,508,578 bytes and matches that description exactly, so
+   one of the two names is wrong and the owner should say which. *Not a blocker
+   for the design; it is a blocker for the page's copy.*
+3. **Does the `.wasm` get committed, or built in the workflow?** Committing it
+   makes the page reproducible from a clone and puts a 73 KB binary in the tree
+   that no reader can diff. Proposed: built in the workflow, with the build
+   command in the README. *Not a blocker; one commit either way.*
+4. **Does the page get the rejection detail in the first commit or the second?**
+   Proposed: the second, because a verdict-only page is useful and a page that
+   reports the wrong failing line is worse than one that reports none.

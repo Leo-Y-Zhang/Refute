@@ -154,7 +154,7 @@ milestone 1b lands.
 | 1b | RAT hint blocks | The author's a(4)-rung certificate checks; `s UNSUPPORTED` becomes rare |
 | 2 | Direct DRAT checking; differential fuzzing vs `drat-trim -f` | The a(4)-rung raw `.drat` verifies with `drat-trim` out of the chain; 10k fuzz cases, zero false accepts |
 | 3 | Native CLI for large proofs | The a(7)-rung proof checks within a **stated** memory budget, from its raw `.drat` and from its `.lrat`. *The "~200 MB LRAT" this row used to say was an estimate: the artefact was built on 2026-08-14 and measures 117.5 MB of LRAT against 87.5 MB of raw DRAT* |
-| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser |
+| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser. *Designed 2026-08-14 in [TDD part 5](TDD.md#part-5--milestone-4-the-playground), measurement-led: the library compiles to `wasm32-unknown-unknown` at 73,699 bytes with no dependencies, agrees with the native checker on all eight fixture pairs and all three verdicts, and the gate artefact needs **8.4 MB and 0.85 s**. The export boundary lives in a second crate so `refute` keeps `unsafe_code = "forbid"`* |
 | 5 | Benchmarks table in README | Like-for-like pipeline comparison, methodology stated |
 
 ## Open questions
@@ -752,7 +752,15 @@ alone.
 
 ## Open questions
 
-1. **Is 64 MB the right budget, or should it be the browser's?** Milestone 4
+1. **ANSWERED BY MEASUREMENT, 2026-08-14: 64 MB is right for native and does
+   not transfer to the browser.** The WASM probe in TDD part 5 measures the
+   a(7) rung at **124.9 MB** of linear memory, of which the store is 19.6 MB
+   and the proof itself is 83.4 MB: a page holds the whole file, where the CLI
+   streams it and holds one line. So the browser figure is set by the input,
+   not by the checker, and milestone 4 states a refusal on proof size instead
+   of a budget on the store. The original question, kept as written:
+
+   **Is 64 MB the right budget, or should it be the browser's?** Milestone 4
    puts this store in a WASM heap where 64 MB is generous and 256 MB is
    plausible but hostile to a phone. The budget proposed here is set by what
    the a(7) rung needs with headroom, not by a browser. **The owner's call, and
