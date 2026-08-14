@@ -153,7 +153,7 @@ milestone 1b lands.
 | **1** | Forward LRAT checker (RUP + hints), CLI | 12 rejection controls pass; each observed failing first |
 | 1b | RAT hint blocks | The author's a(4)-rung certificate checks; `s UNSUPPORTED` becomes rare |
 | 2 | Direct DRAT checking; differential fuzzing vs `drat-trim -f` | The a(4)-rung raw `.drat` verifies with `drat-trim` out of the chain; 10k fuzz cases, zero false accepts |
-| 3 | Native CLI for large proofs | The a(7)-rung proof (~200 MB LRAT) checks within memory budget |
+| 3 | Native CLI for large proofs | The a(7)-rung proof checks within a **stated** memory budget, from its raw `.drat` and from its `.lrat`. *The "~200 MB LRAT" this row used to say was an estimate: the artefact was built on 2026-08-14 and measures 117.5 MB of LRAT against 87.5 MB of raw DRAT* |
 | 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser |
 | 5 | Benchmarks table in README | Like-for-like pipeline comparison, methodology stated |
 
@@ -569,3 +569,222 @@ project was started for.
 - **Accepting a lemma because it is RAT on *some* literal.** Sound, and a
   search where the format promises an answer. Measured at 348 of 348 in DRAT,
   as it was in LRAT: the first literal is always the pivot.
+
+---
+
+# Milestone 3 — native CLI for large proofs
+
+**Status:** BUILT on `feat/milestone-3`, not merged · **Date:** 2026-08-14 ·
+**TDD:** [TDD.md, part 4](TDD.md#part-4--milestone-3-scale-and-memory)
+
+*Outcome: the a(7) rung checks in **31.2 MB** against a stated 64 MB budget,
+where it took 182.6 MB when this was written, and it takes 51.1 s where it took
+63.9 s — reclaiming memory made it faster, not slower. Every
+"success looks like" box below is ticked with the measurement beside it.
+Question 1 — whether 64 MB is the right number — is still the owner's.*
+
+## Problem, and the first thing measurement changed about it
+
+The roadmap row for this milestone says *"The a(7)-rung proof (~200 MB LRAT)
+checks within memory budget"*. Before anything was designed the artefact was
+built and both halves of that sentence were run. Both already pass:
+
+| artefact | size | `refute` today | verdict |
+|---|---:|---|---|
+| A217058 a(7) rung, raw `.drat` | 87,490,047 B | 63.9 s, **182.6 MB** peak working set | `s VERIFIED` |
+| the same rung's `.lrat` | 117,547,684 B | 1.59 s, **5.5 MB** peak working set | `s VERIFIED` |
+
+So two corrections before the milestone starts. **The LRAT file is 117.5 MB and
+not ~200 MB** — the roadmap's figure was an estimate and the measured one
+replaces it. And **there is no memory budget to check against**, because none
+has ever been written down. "Checks within memory budget" cannot be passed or
+failed until somebody states the budget, and stating it is most of this
+milestone.
+
+What is actually wrong is visible only once the bytes are counted. On the a(7)
+rung the DRAT checker holds **182.6 MB to check a database whose live contents
+are about 10 MB**. The excess is not slack, it is retained garbage:
+
+| held | at the end of the a(7) rung | of which live |
+|---|---:|---:|
+| the clause arena | 64.0 MB | 0.5 MB |
+| `bykey`, the deletion index | 96.5 MB | 1.6 MB |
+| clause metadata | 11.4 MB | 0.2 MB |
+| watches and occurrences | 7.7 MB | 7.7 MB |
+| **total accounted** | **179.8 MB** | **~10 MB** |
+
+The store never reclaims a deleted clause. 750,578 of the proof's 763,382
+additions are deleted again before the end, and every one of them keeps its
+literals in the arena, its key in the deletion map and its metadata slot
+forever. **Memory is proportional to the length of the proof rather than to the
+size of the live database**, and the LRAT path — which drops a deleted clause
+from a `HashMap` and is therefore already proportional to the live database —
+is the evidence that the difference is a decision and not a law: it checks a
+*larger* file in 5.5 MB.
+
+## Who it is for
+
+The same three people, and this milestone is for the first of them almost
+alone.
+
+1. **The author**, re-checking the largest certificates behind published OEIS
+   terms. The a(7) rung is the biggest artefact this project has ever had, and
+   the rung above it is three to five times larger again.
+2. **A reader** who wants to check one of those certificates on an ordinary
+   laptop and needs to know, before starting, roughly what it will cost.
+3. **Milestone 4's browser tab**, which has a hard memory ceiling and inherits
+   whatever this store does.
+
+## Success looks like
+
+- [x] **A memory budget exists, in writing, with a measured figure beside it.**
+      For the a(7) rung: **at most 64 MB peak working set on the raw DRAT and
+      at most 16 MB on the LRAT.** Measured, not asserted, by the method the
+      TDD states. *In `docs/TDD.md` part 4 and in the README, with the measured
+      figure in the same table as the budget.*
+- [x] The a(7) rung's raw `.drat` verifies inside that budget, and the same
+      rung's `.lrat` verifies inside its own. *31.2 MB against 64, and 5.5 MB
+      against 16. It was 182.6 MB.*
+- [x] **The store's memory is proportional to the live database and not to the
+      proof's length**, and that is asserted by counters in CI rather than by a
+      measurement on one machine: at the end of a run no dead clause's key is
+      retained, and the dead part of the arena is no larger than the live part.
+      *P21 and B38, on a real certificate, both observed failing first.*
+- [x] Every one of milestones 1, 1b and 2 is unchanged in what it accepts and
+      rejects. 128 tests stay green; the three-way verdict is untouched; no new
+      verdict, no new format, no new exit code. *With one correction: two
+      rejection messages name a different resolution candidate — same verdict,
+      same reason, same pivot, same candidate set. The candidate loop reports
+      the first failure and the list is now in insertion order rather than in
+      the order `swap_remove` left it. Recorded in the TDD and beside both
+      tests.*
+- [x] The 10,000-case differential fuzz gate is **re-run and still shows zero
+      false accepts**, because the clause store this milestone rewrites is the
+      thing that fuzz run was measuring. *Re-run under `--force-compaction`, so
+      that the new code is entered rather than skipped.*
+- [x] Each new rule is pinned by a test observed failing — for a memory rule
+      that means a counter assertion, because a 5x change in memory was measured
+      to leave all 128 existing tests green. *Eleven mutation rows run and
+      recorded; two killed nothing, one was fixed and one is a stated residual.*
+- [x] The peak-memory and wall-clock table for the whole rung ladder is
+      recorded, with the method, so the next milestone can tell a regression
+      from a bigger file. *`tools/scale.sh`, and the table is in the TDD.*
+
+## Requirements
+
+**Must**
+
+- Reclaim the arena. A deleted clause's literals do not survive the run.
+- Reclaim the deletion index. A key with no live clause under it is not held.
+- A stated budget, a stated measurement method, and the real figure beside each.
+- New `--stats` counters that make the budget observable on a reader's own
+  proof: bytes held by the store, the dead fraction of the arena, and how many
+  times it was compacted.
+- The counter-based controls above, in CI, on committed fixtures and inline
+  formulas — the corpus is at 496 KB of its 500 KB budget and this milestone
+  adds no fixture bytes.
+- A forced-compaction setting, so that the fuzz harness exercises the new code
+  path on every deletion of all 10,000 cases rather than only on the few large
+  files that trigger it naturally.
+- No new dependency. MSRV stays 1.74.0. Standard library only.
+
+**Should**
+
+- A repeatable scale harness that prints the ladder table — sizes, times, peak
+  working sets — from artefacts passed in by directory, so the budget can be
+  re-measured rather than re-quoted.
+- The re-measured `drat-trim` comparison for the same rung, since this is the
+  first artefact large enough for the comparison to mean anything.
+
+**Won't (this time)**
+
+- Any change to what is checked. No new verdict, no new reason code, no new
+  format, no relaxation or tightening of a single acceptance rule.
+- Backward checking, trimming, core extraction, LRAT emission, binary DRAT,
+  parallelism. Unchanged since milestone 1.
+- Making propagation faster. 3,015,020,345 watch visits are most of the a(7)
+  rung's 63.9 s and the honest thing to say about them is that they are the
+  algorithm, not a defect. Milestone 5 owns the benchmark table.
+- Reclaiming clause metadata slots. Measured at 11.4 MB of a projected 31.1 MB
+  peak, and buying it means decoupling the identifier a rejection reports from
+  the slot it is stored in. The TDD writes down the trigger that would make it
+  worth doing.
+
+## Explicitly out of scope
+
+- **A general memory allocator, an arena crate, or `jemalloc`.** The standard
+  library's `Vec` is what the store is made of, and the measurement says the
+  problem is that nothing is ever freed, not that freeing is slow.
+- **Memory-mapping the proof.** It is a streaming reader by design; the file is
+  read once, forward, and never held. The measured per-file memory is the line
+  being decoded, at most 155 bytes on this artefact.
+- **Trusting a peak-working-set number as a test.** It is machine-dependent and
+  not portable to CI. It is recorded as a measurement; what CI asserts is
+  counters.
+- **Being faster than `drat-trim`.** Unchanged and permanent, and now measured
+  at the only scale where it matters: `drat-trim -f` checks the a(7) rung in
+  33.5 s and 141.2 MB; `refute` takes 63.9 s and 182.6 MB today.
+
+## Safety and privacy
+
+- **Personal data:** none, unchanged.
+- **The serious defect is unchanged, and this milestone touches the code
+  nearest to it.** Compaction rewrites the offset at which every live clause's
+  literals are found. An off-by-one there does not crash: it silently gives a
+  clause different literals, and a clause with different literals can reach a
+  conflict that the real formula does not imply. **That is a false `VERIFIED`
+  with nothing in the file to contradict it**, and it is why this milestone's
+  controls are over satisfiable formulas and its fuzz gate is re-run in full
+  rather than quoted.
+- **The reclaiming rules fail in different directions, and the difference is
+  designed.** Dropping a deletion key that still has a live clause under it
+  leaves that clause live, which gives the RAT check *more* candidates to
+  satisfy: a false rejection. Dropping a live entry from the occurrence index
+  removes a candidate that had to be checked: a false acceptance. The second is
+  the one that gets a fixture over a formula with a model.
+- **Revocation** still has no meaning: no accounts, no sessions, no server, no
+  stored state.
+- **Worst outcome if wrong:** the author cites Refute as corroboration of an
+  upper bound that is false, on the largest certificate the project has. The
+  mitigation is the ordering rule the TDD keeps from milestones 1b and 2: no
+  claim about the a(7) rung is written down until the suite, the mutation-kill
+  pass and the full 10,000-case fuzz run have all been re-run on the new store.
+
+## Open questions
+
+1. **Is 64 MB the right budget, or should it be the browser's?** Milestone 4
+   puts this store in a WASM heap where 64 MB is generous and 256 MB is
+   plausible but hostile to a phone. The budget proposed here is set by what
+   the a(7) rung needs with headroom, not by a browser. **The owner's call, and
+   it changes only a number in a document and one assertion in the scale
+   harness.** *Not a blocker for the build; it is a blocker for calling the
+   milestone done.*
+2. **Does the ladder become a named local gate?** Nothing above n=21 can be
+   committed — 87.5 MB against a 500 KB corpus budget standing at 496 KB. The
+   question is whether rungs 3 to 7, regenerable in about a minute from the
+   author's other repository, should be a documented local gate the way
+   `tools/differential.sh --extra` already is. Proposed: yes, as a harness that
+   reads a directory, with nothing committed. *Not a blocker.*
+
+## Not doing / rejected alternatives
+
+Each of these was measured on the real artefact and killed by the number rather
+than by argument. The measurements are in TDD part 4.
+
+- **Lowering `Limits::max_line_bytes`.** The longest line in the 87.5 MB proof
+  is 155 bytes and in the 117.5 MB LRAT 3,848 bytes, against a 16 MB ceiling —
+  so the ceiling costs nothing on any real file, and lowering it could only
+  start rejecting a legitimate proof that writes one very long clause. Kept
+  exactly as it is, now with a measurement behind it instead of an estimate.
+- **Making the per-literal vectors cheaper than `Vec<Vec<u32>>`.** They cost 96
+  bytes per variable, which sounds bad and measures at 0.04 MB on this
+  artefact, because a real vdW rung declares 421 variables. The 96 bytes only
+  matter against the `max_drat_var` ceiling, which is a ceiling and not a
+  budget; TDD part 4 states the worst case rather than hiding it.
+- **Keeping the proof in memory, or memory-mapping it.** The reader already
+  streams, and the measurement says the file is not what is held.
+- **Assuming compaction costs time.** It was measured to *save* it: same proof,
+  identical counters, 63.9 s before and 57.9 s after, because a compact arena is
+  a cache-friendly one. Milestone 2's batching experiment made things worse than
+  its design predicted; this one made them better. Neither was predictable and
+  both were measured.

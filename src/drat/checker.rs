@@ -64,9 +64,19 @@ struct Refusal {
 }
 
 impl Checker {
+    /// The run's counters, with the store walked once at the end for the four
+    /// that describe what it holds rather than what it did.
+    ///
+    /// `compactions` and `occurrence_entries_filtered` come through the store's
+    /// own counters, because they count events and not bytes.
     fn stats(&self) -> Stats {
+        let footprint = self.store.footprint();
         Stats {
             assignment_slots: self.store.assignment_slots(),
+            store_bytes: footprint.store_bytes,
+            live_arena_bytes: footprint.live_arena_bytes,
+            dead_arena_bytes: footprint.dead_arena_bytes,
+            deletion_index_entries: footprint.deletion_index_entries,
             ..self.store.stats
         }
     }

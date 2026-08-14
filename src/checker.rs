@@ -94,15 +94,27 @@ pub struct Stats {
     pub propagations: u64,
     /// Clauses inspected in watch lists. DRAT only.
     pub watch_visits: u64,
-    /// Occurrence-index slots written or cleared. DRAT only.
+    /// Occurrence-index slots **written**. DRAT only.
     ///
     /// The one performance bet in milestone 2, made countable. Part 2 measured
     /// the same choice and took the scan; part 3 measured it again on raw
     /// proofs and took the index, because `drat-trim`'s LRAT deletes far
     /// harder than the file the solver wrote — 159 live clauses on average
-    /// against 666 for the same instance. The trigger for going back is
-    /// written down: if this ever exceeds RAT additions times mean live
-    /// clauses on a real proof, return to the scan.
+    /// against 666 for the same instance.
+    ///
+    /// It counted clearings too until milestone 3, and that was the mistake
+    /// part 4 found: the number it reported was not the price being paid.
+    /// Clearing an entry performs a linear search over a list holding every
+    /// live clause that contains the literal, and the counter charged one for
+    /// the whole search. Measured directly, the searches compare
+    /// **31,076,047,076** entries on the A217058 a(7) rung to answer 384
+    /// candidate queries — an order of magnitude more work than propagation,
+    /// which is the thing the checker is supposed to be doing.
+    ///
+    /// So the trigger part 3 wrote against this counter had already fired
+    /// without the counter showing it. Deletion no longer touches the index at
+    /// all; the query side is [`Stats::occurrence_entries_filtered`], and the
+    /// trigger is written against that.
     pub occurrence_updates: u64,
     /// Additions accepted because unit propagation reached a conflict. DRAT
     /// only; on the LRAT path the hint walk is the same thing under a name the
@@ -120,6 +132,45 @@ pub struct Stats {
     /// Every live clause holding the negated pivot, every time — the loop has
     /// no early exit, because RAT is a claim about all of them.
     pub rat_candidates_checked: u64,
+    /// Bytes the clause store holds at the end of the run. DRAT only.
+    ///
+    /// The arena, the metadata array, the watch and occurrence lists, the
+    /// deletion index and the assignment. Summed from *capacities*, so it is
+    /// what the process asked the allocator for rather than what it is using,
+    /// and it accounted for 179.8 MB of a 182.6 MB peak working set on the
+    /// largest proof measured for `docs/TDD.md` part 4.
+    ///
+    /// It exists because a memory rule cannot be pinned by a verdict: every
+    /// variant measured for part 4 returned the same verdict on every
+    /// artefact, and the whole 128-test suite stayed green across a change
+    /// that moved the peak working set by a factor of five. A counter is the
+    /// only control a memory regression moves.
+    pub store_bytes: usize,
+    /// Of the arena, the bytes belonging to clauses that are no longer live.
+    ///
+    /// Zero after a compaction, and bounded by `live_arena_bytes` plus
+    /// [`crate::limits::Limits::max_dead_arena_lits`] at the end of any run
+    /// that deleted anything.
+    pub dead_arena_bytes: usize,
+    /// Of the arena, the bytes belonging to live clauses. DRAT only.
+    pub live_arena_bytes: usize,
+    /// Distinct clause bodies held by the deletion index. DRAT only.
+    ///
+    /// The index is keyed by literal set because a DRAT deletion names
+    /// literals rather than an identifier. It should hold one entry per
+    /// distinct *live* clause body; an entry per distinct body ever added is a
+    /// second copy of the whole proof, which is what it was.
+    pub deletion_index_entries: usize,
+    /// Arena compactions performed. DRAT only.
+    pub compactions: u64,
+    /// Occurrence-list entries examined while answering candidate queries.
+    /// DRAT only.
+    ///
+    /// The cost of the lazy occurrence index, and the trigger for abandoning
+    /// it: if a real proof reports more of these than
+    /// `rat_additions * peak_live_clauses`, the index is losing to the plain
+    /// scan and `Store::resolution_candidates` should become one.
+    pub occurrence_entries_filtered: u64,
 }
 
 /// Everything one run produces.

@@ -35,6 +35,13 @@ Locations are never written into a tracked file:
 
 Deterministic. `--seed S --cases N` is reproducible, and any single case is
 reproducible on its own with `--case K`.
+
+`--force-compaction` runs Refute with its arena compaction floor at zero.
+Milestone 3 made the clause store reclaim what it holds, and the whole safety
+claim for that is that it changes what is held and nothing that is decided --
+which is exactly what this harness is shaped to test. Without the flag the
+random proofs are too small and delete too little to reach the new code at all,
+so the gate is re-run under it rather than quoted from before.
 """
 import argparse
 import os
@@ -165,8 +172,8 @@ def mutants(rng, steps):
     return out
 
 
-def verdict(binary, cnf, proof, forward=False):
-    args = [binary, cnf, proof] + (["-f"] if forward else [])
+def verdict(binary, cnf, proof, forward=False, extra=()):
+    args = [binary, cnf, proof] + (["-f"] if forward else []) + list(extra)
     result = subprocess.run(args, capture_output=True, text=True)
     for line in result.stdout.splitlines():
         if line.startswith("s VERIFIED"):
@@ -182,13 +189,26 @@ class Run:
         self.checked = 0
         self.harmless = 0
         self.strict = 0
+        self.compacted = 0
         self.failures = []
 
     def compare(self, case, kind, cnf, proof):
         """One comparison. Returns False on a hard failure."""
-        ours, stderr = verdict(self.args.refute, cnf, proof)
+        ours, stderr = verdict(self.args.refute, cnf, proof,
+                               extra=self.args.refute_flags)
         theirs, _ = verdict(self.args.drat_trim, cnf, proof, forward=True)
         self.checked += 1
+        # How much of the run entered the code the flag exists to reach. A
+        # proof that deletes nothing cannot compact whatever the floor is, and
+        # random proofs often delete nothing -- measured, on the harness's own
+        # instance shapes: one 150-deletion refutation compacted once and one
+        # 0-deletion refutation did not. Reporting the fraction is the
+        # difference between a gate and a claim about a gate.
+        for field in stderr.split(","):
+            if field.strip().endswith("compactions"):
+                if field.strip().split()[0] != "0":
+                    self.compacted += 1
+                break
 
         if kind in UNCONDITIONAL:
             if ours:
@@ -222,11 +242,24 @@ def main():
     parser.add_argument("--drat-trim", dest="drat_trim",
                         default=os.environ.get("DRAT_TRIM"))
     parser.add_argument("--refute", default=os.environ.get("REFUTE"))
+    parser.add_argument("--force-compaction", action="store_true",
+                        help="run refute with max_dead_arena_lits = 0, so "
+                             "that the arena compacts as soon as its dead "
+                             "half is the larger one")
     args = parser.parse_args()
     for name in ("kissat", "drat_trim", "refute"):
         if not getattr(args, name):
             sys.exit("set KISSAT, DRAT_TRIM and REFUTE, or pass --%s"
                      % name.replace("_", "-"))
+    # Random proofs are small and delete little, so at the default floor of
+    # 1,024 dead literals almost none of them reach the reclamation code that
+    # milestone 3 added -- and a harness that never enters the code it is
+    # guarding reports the same summary whether that code works or not.
+    # `--stats` rides along so the summary can report how many comparisons
+    # actually compacted. It changes nothing about the verdict; it only makes
+    # the counter line available on stderr, which this harness already reads.
+    args.refute_flags = (["--max-dead-arena-lits=0", "--stats"]
+                         if args.force_compaction else [])
 
     cases = [args.case] if args.case is not None else range(args.cases)
     ran = 0
@@ -294,6 +327,8 @@ def main():
 
     # Cases RUN, not cases asked for: the loop stops at the first hard
     # failure, and reporting the request would overstate the evidence.
+    print("refute flags    %s"
+          % (" ".join(args.refute_flags) if args.refute_flags else "(none)"))
     print("cases           %d (%d unsatisfiable, %d satisfiable)"
           % (ran, unsat_seen, sat_seen))
     print("comparisons     %d" % run.checked)
@@ -302,6 +337,12 @@ def main():
              100.0 * run.harmless / max(1, run.checked - unsat_seen)))
     print("strict wins     %d (refute rejected, drat-trim -f verified, "
           "reason on the documented list)" % run.strict)
+    if args.force_compaction:
+        print("compacted       %d of %d comparisons (%.1f%%) really entered "
+              "the arena compaction; the rest deleted too little to trigger it "
+              "at any floor"
+              % (run.compacted, run.checked,
+                 100.0 * run.compacted / max(1, run.checked)))
     print("false accepts   %d" % len(run.failures))
     for line in run.failures:
         print("  " + line)

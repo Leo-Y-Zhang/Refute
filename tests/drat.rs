@@ -209,9 +209,22 @@ fn p18_empty_clause_in_cnf_drat_verifies() {
 
 /// D1. The first addition dropped. Every later step written against it loses
 /// its reason.
+///
+/// The candidate moved from 79 to 48 in milestone 3, and the reason is worth
+/// recording rather than just re-baselining. The loop stops at the first
+/// candidate whose resolvent is not implied, so which one is named depends on
+/// the order the occurrence list is in. Deletion used to `swap_remove` from
+/// that list, which moves an entry from the end into the gap and leaves an
+/// order nobody could state; it now leaves the list alone and the query
+/// filters it in place, so the order is the order the clauses were added and
+/// the candidate named is the lowest-numbered one that fails.
+///
+/// The set examined is the same, the pivot is the same, and the verdict is the
+/// same. What changed is that the number in the message can now be predicted
+/// from the file.
 #[test]
 fn d1_addition_dropped_is_rejected() {
-    assert_rat_check_failed("real_rat_proof.cnf", "d01_addition_dropped.drat", 21, 79);
+    assert_rat_check_failed("real_rat_proof.cnf", "d01_addition_dropped.drat", 21, 48);
 }
 
 /// D2. The last load-bearing addition dropped, so the rejection happens
@@ -248,9 +261,11 @@ fn d4_additions_swapped_is_rejected() {
 /// The control on where the candidate set comes from: a checker that
 /// enumerates deleted clauses, or that treats deletion as advisory, verifies
 /// this.
+/// The candidate moved from 80 to 49 in milestone 3, for the reason recorded
+/// on D1: the occurrence list is now in the order the clauses were added.
 #[test]
 fn d5_deleted_then_used_is_rejected() {
-    assert_rat_check_failed("real_rat_proof.cnf", "d05_deleted_then_used.drat", 21, 80);
+    assert_rat_check_failed("real_rat_proof.cnf", "d05_deleted_then_used.drat", 21, 49);
 }
 
 /// D6. Truncated. Nothing was derived, so rejection is a theorem.
@@ -592,11 +607,16 @@ fn the_drat_counter_line_is_printed_only_for_a_drat_run() {
         "the DRAT counter line was printed for an LRAT run: {:?}",
         lrat.stderr
     );
-    // The bet, made observable on a reader's own proof: 593 index slot
-    // updates against the scan this file would have cost, which is 20 RAT
-    // additions times a database averaging some forty live clauses.
+    // The bet, made observable on a reader's own proof. Re-baselined in
+    // milestone 3 from 593 to 377, deliberately: the counter charged one unit
+    // for each entry cleared on a deletion, and nothing at all for the linear
+    // search that clearing performed over a list holding every live clause
+    // with that literal in it -- which is the cost that actually matters, and
+    // is 31 billion comparisons on the largest proof measured. It now counts
+    // insertions, which are one unit of work each, and the query side is
+    // reported separately as `occurrence entries filtered`.
     assert!(
-        drat.stderr.contains("593 occurrence updates"),
+        drat.stderr.contains("377 occurrence updates"),
         "the occurrence count moved: {:?}",
         drat.stderr
     );

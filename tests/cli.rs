@@ -230,3 +230,44 @@ fn a_rejection_names_where_and_why() {
     assert!(run.stderr.contains("line"), "{:?}", run.stderr);
     assert!(run.stderr.contains("hint"), "{:?}", run.stderr);
 }
+
+/// The undocumented compaction flag is really plumbed, and really changes
+/// nothing a caller can see.
+///
+/// It is the only flag the usage line does not list, so it is the only one
+/// with no user to notice it stopped working. `tools/fuzz.py` depends on it
+/// reaching `Limits`: a harness that silently ran ten thousand cases against
+/// the default is a harness that never entered the code it was guarding, and
+/// it would report exactly the same summary either way.
+#[test]
+fn the_compaction_flag_is_plumbed_and_changes_no_verdict() {
+    let pair = [
+        common::fixture("vdw_a217058_n21.cnf")
+            .to_string_lossy()
+            .into_owned(),
+        common::fixture("vdw_a217058_n21.drat")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let default = common::cli_args(&pair);
+    default.assert("s VERIFIED", 0);
+
+    // The largest is above anything this fixture's arena can reach, so it is
+    // the "never compact" end of the range. Kept inside 32 bits: `usize` is
+    // the platform's, and the point of the case is the range and not the word.
+    for setting in ["0", "1", "1000000000"] {
+        let mut args = pair.to_vec();
+        args.push(format!("--max-dead-arena-lits={setting}"));
+        common::cli_args(&args).assert("s VERIFIED", 0);
+    }
+
+    // A bad value is a usage error, not a verdict: nothing about the proof was
+    // in question, and exit 1 here would let a typo read as a bad certificate.
+    for bad in ["", "-1", "lots"] {
+        let mut args = pair.to_vec();
+        args.push(format!("--max-dead-arena-lits={bad}"));
+        let run = common::cli_args(&args);
+        assert_eq!(run.code, 3, "stderr was {:?}", run.stderr);
+        assert!(run.stdout.is_empty(), "stdout was {:?}", run.stdout);
+    }
+}

@@ -1704,3 +1704,725 @@ divergence attributable to a named rule.
    to settle. It now bounds three more vectors, all grown on demand, so it is
    still a ceiling on what a literal may be rather than a decision about an
    allocation.
+
+---
+
+# Part 4 — milestone 3: scale and memory
+
+**Status:** draft · **Date:** 2026-08-14 · **Supersedes:** nothing. Not one
+acceptance rule in parts 1 to 3 moves. This milestone changes *how much the
+checker holds while it applies them*, and nothing else. The 128-test suite must
+be green at every commit in the build order, and the three-way verdict and the
+single-construction-site rule for `Verified` are untouched.
+
+## The measurement, first — and this time it changed the milestone
+
+Same discipline as parts 1 to 3, and the same lesson, now paid for a third
+time. Part 3's "solver ceiling" was a misdiagnosis and its batching experiment
+made things measurably worse. So the artefact was built and profiled **before a
+single data structure was proposed**, and the profile moved the milestone.
+
+### The artefact, and how to rebuild it
+
+The whole A217058 ladder comes from the author's certificate generator in
+another of the author's repositories, with symmetry breaking off:
+
+    python vdw/drat_certify.py --seq A217058 --ladder 0-7 --keep <dir>
+
+Nothing from it is committed here. `<dir>` is a directory the reader chooses;
+no path from any machine appears in a tracked file, as with
+`tools/differential.sh --extra`. Rebuilding the whole ladder including the a(7)
+rung took **56 s of solver time** on the machine these numbers come from, so it
+is a re-measurable gate rather than a stored artefact.
+
+### The ladder
+
+Raw `kissat --no-binary` DRAT, checked by the release binary at `main`
+(`0941aa5`). Peak working set by polling `PeakWorkingSet64` every 5 ms —
+the same method part 2 used for `max_line_bytes`. Times are the whole process,
+including reading the file.
+
+| rung | n, j | `.drat` bytes | additions | deletions | peak live | `refute` | peak WS |
+|---|---|---:|---:|---:|---:|---:|---:|
+| a(0) | 18, 0 | 4,874 | 173 | 207 | 207 | 0.07 s | 4.6 MB |
+| a(1) | 21, 1 | 20,423 | 559 | 633 | 571 | 0.08 s | 4.8 MB |
+| a(2) | 25, 2 | 111,029 | 2,388 | 1,695 | 1,448 | 0.09 s | 5.3 MB |
+| a(3) | 29, 3 | 668,068 | 11,067 | 7,836 | 4,218 | 0.19 s | 7.3 MB |
+| a(4) | 33, 4 | 2,508,578 | 31,195 | 26,988 | 10,400 | 0.82 s | 14.1 MB |
+| a(5) | 36, 5 | 8,059,616 | 87,354 | 77,770 | 17,108 | 3.10 s | 29.3 MB |
+| a(6) | 40, 6 | 15,582,333 | 154,759 | 143,153 | 21,354 | 6.91 s | 43.4 MB |
+| **a(7)** | **42, 7** | **87,490,047** | **763,382** | **750,578** | **40,631** | **63.90 s** | **182.6 MB** |
+
+The a(4) row reproduces part 3's measurement to the unit — 31,195 additions,
+26,988 deletions, 10,400 peak live, 626,008 occurrence updates — which is the
+check that this ladder is the same population part 3 measured.
+
+### The two acceptance artefacts already pass
+
+| what | figure |
+|---|---|
+| a(7) raw `.drat`, 87,490,047 B, 1,513,960 lines | `s VERIFIED`, 63.90 s, **182.6 MB** |
+| a(7) `.lrat`, 117,547,684 B, 851,744 lines, produced by `drat-trim -L` | `s VERIFIED`, 1.59 s, **5.5 MB** |
+| `drat-trim` backward on the raw proof | `s VERIFIED`, 21.9 s |
+| `drat-trim -f` on the raw proof | `s VERIFIED`, 33.5 s, **141.2 MB** |
+| the LRAT is 574,437 of the raw proof's 763,383 lemmas | `drat-trim`'s own count |
+
+**The PRD's "~200 MB LRAT" is 117.5 MB**, and the milestone's stated gate — "the
+a(7) rung checks within memory budget" — is already met on both files by the
+code at `main`, against any budget one would have written. What is not met is
+that **no budget exists**, and that the DRAT path holds 182.6 MB to check about
+10 MB of live data. Milestone 3 is therefore: state the budget, delete the
+garbage that makes it hard to state, and pin both with tests that can fail.
+
+### Where the bytes go
+
+Counted with a throwaway instrumented build that walked every structure in the
+store at the end of the run and reported capacities, not estimates. It accounts
+for **179.8 of the 182.6 MB** measured from outside the process, so the model is
+the process.
+
+| structure | a(4) rung | a(6) rung | **a(7) rung** | live at a(7) |
+|---|---:|---:|---:|---:|
+| `lits` — the clause arena | 2.0 MB | 8.0 MB | **64.0 MB** | 0.5 MB |
+| `bykey` table + keys + id lists | 4.4 MB | 20.8 MB | **96.5 MB** | 1.6 MB |
+| `clauses` — one `ClauseMeta` per clause ever added | 0.5 MB | 2.6 MB | **11.4 MB** | 0.2 MB |
+| `occ` heap | 0.7 MB | 2.1 MB | 5.1 MB | 5.1 MB |
+| `watches` heap | 0.3 MB | 1.0 MB | 2.6 MB | 2.6 MB |
+| `watches` + `occ` slot vectors (96 B per variable) | 0.02 MB | 0.02 MB | 0.02 MB | 0.02 MB |
+| `assign`, `trail`, `units` | 0.001 MB | 0.001 MB | 0.001 MB | 0.001 MB |
+| **total accounted** | **7.9 MB** | **34.5 MB** | **179.8 MB** | **~10 MB** |
+| live clauses of clauses ever added | 5,456 / 32,444 | 13,390 / 156,543 | **14,757 / 765,335** | |
+| `bykey` entries with no live clause under them | 26,630 / 32,057 | 142,468 / 155,817 | **748,090 / 762,728** | |
+
+Three facts, and each is a decision rather than a law:
+
+- **The arena never shrinks.** `Store::delete` marks `live = false` and leaves
+  the literals where they are. 98 % of the a(7) rung's clauses are dead at the
+  end and 99.2 % of the arena is theirs.
+- **`bykey` never drops a key.** `delete` pops an identifier out of the
+  `Vec<u32>` and leaves the entry, so the map keeps a `Box<[Lit]>` copy of the
+  literals of every distinct clause the proof ever contained — a *second* copy
+  of the arena, plus a `Vec` header each. It is the largest single item.
+- **`clauses` grows with every addition**, at 12 bytes each, whether the clause
+  survives or not.
+
+None of this is visible from the LRAT path, which is why it was never seen: the
+LRAT checker's database is a `HashMap<ClauseId, Clause>` and `delete` calls
+`remove`, so it is already proportional to the live database. It checks the
+*larger* file — 117.5 MB against 87.5 MB — in 5.5 MB.
+
+### The four experiments
+
+Each was built on top of the previous one, run on the real ladder, and reverted.
+Every one of them produced **identical counters** — additions, deletions, peak
+live clauses, assignments, propagations, watch visits, candidates checked — and
+the same verdict on every artefact, which is the evidence that they changed what
+was held and not what was checked.
+
+| # | change | a(7) footprint | a(7) peak WS | a(7) time |
+|---|---|---:|---:|---:|
+| — | `main` today | 179.8 MB | 182.6 MB | 63.90 s |
+| **A** | drop a `bykey` entry when its last live copy goes | 84.8 MB | — | — |
+| **B** | A, plus compact the arena when dead literals exceed live | 22.2 MB | **35.0 MB** | **57.88 s** |
+| **D** | B, but no occurrence index at all: scan the live clauses | 17.1 MB | **26.9 MB** | **51.57 s** |
+| **E** | B, plus a *lazy* occurrence index: no work on delete, filtered at query, purged at compaction | 18.5 MB | **31.1 MB** | **54.00 s** |
+
+Smaller instances, three runs each, steady state (the first run of a freshly
+linked binary is consistently 0.5–0.8 s slower and those readings are discarded):
+
+| variant | a(4) | a(6) | pigeonhole 10x9 |
+|---|---|---|---|
+| `main` | 0.82 s / 14.1 MB | 6.91 s / 43.4 MB | 0.70 s / 14.4 MB |
+| B | 0.84 s / 9.0 MB | 6.87 s / 17.0 MB | — |
+| D | 0.74 s / 8.3 MB | 6.12 s / 14.3 MB | 0.70 s / 8.7 MB |
+| E | 0.78 s / 9.7 MB | 6.22 s / 17.3 MB | 0.62 s / 9.8 MB |
+
+**Compaction does not cost time; it saves it.** 63.90 s to 57.88 s on the same
+proof with the same counters. That was not predicted — part 3's batching
+experiment predicted a saving and measured a loss — and it is recorded here as a
+measurement, not as a reason.
+
+### The occurrence-index trigger part 3 wrote down has fired
+
+Part 3 chose the index over the scan, and wrote the trigger for reversing it:
+*"if `occurrence_updates` exceeds the scan cost the same run reports — RAT lines
+times mean live clauses — on a real proof, go back to the scan."*
+
+It has, and by more than the counter admits. `occurrence_updates` counts one
+per literal inserted or cleared. It does not count the **linear search** that
+each clearing performs: `delete` runs `slot.iter().position(...)` over an
+occurrence list that holds every live clause containing that literal. Counted
+directly:
+
+| proof | occurrence list entries compared during deletion | watch visits | RAT additions | candidates the index was asked for |
+|---|---:|---:|---:|---:|
+| a(4) rung | **200,595,972** | 41,879,267 | 195 | 234 |
+| a(7) rung | **31,076,047,076** | 3,015,020,345 | 320 | 384 |
+
+**Thirty-one billion comparisons to answer 320 queries.** The index's
+maintenance is an order of magnitude larger than propagation, which is the thing
+the checker is supposed to be doing. Part 3's cost model priced an index update
+at O(1) when the implementation makes it O(list length), and it priced the scan
+at "RAT lines times mean live clauses" using the *peak*; the scan actually
+examines 493,935 live clauses on the a(4) rung and 998,560 on the a(7) rung.
+Both halves of the comparison were wrong in the same direction.
+
+Also measured, because it decides the shape of the fix: **RAT additions do not
+scale with the proof.** 195 at the a(4) rung, 320 at the a(7) rung across
+763,382 additions, 198 on pigeonhole 10x9 across 32,196. They come from the
+solver's preprocessing, not from its learning, so they track the *formula*.
+That makes the pure scan (D) extremely attractive on every real file and
+quadratic on a hand-written proof whose every line is RAT — which is exactly the
+adversarial input this project assumes it will be handed.
+
+**The decision is E**, on the measurement: within 5 % of D on every real proof,
+faster than D on the RAT-dense instance, and with no quadratic term for an
+adversary to reach. D is recorded as the measured alternative and the trigger
+for switching to it is written below.
+
+### Three things measurement killed
+
+- **Lowering `Limits::max_line_bytes`.** Longest line: **155 bytes** in the
+  87.5 MB DRAT, **3,848 bytes** in the 117.5 MB LRAT, against a 16 MB ceiling.
+  The ceiling costs nothing on any real file — the reader's line buffer keeps
+  the capacity of the longest line it has seen, not the ceiling — and lowering
+  it could only begin rejecting a legitimate proof with one very long clause.
+  **Unchanged**, now with a measurement behind it.
+- **Making the per-literal vectors cheaper.** `watches` and `occ` are
+  `Vec<Vec<u32>>`: 96 bytes per variable whether used or not. At 421 variables
+  that is **0.02 MB**, four hundredths of one per cent of the a(7) rung's
+  footprint. **Unchanged.** The 96 bytes matter only against `max_drat_var`,
+  which is a ceiling and not a budget; see below.
+- **Holding the proof, or memory-mapping it.** The reader streams and is
+  measured to hold one line. Nothing to fix.
+
+### One thing measurement proved about the test suite
+
+Experiment B changes the a(7) rung's peak working set by a factor of 5.2 and
+**leaves all 128 tests green**. Experiment E changes three of them, and all
+three are exact-count assertions on `--stats` output, not verdicts. So: the
+existing suite pins nothing whatsoever about memory, and this milestone's
+controls have to be counters that a memory regression moves. That is the
+milestone's own instance of the rule that a green suite says nothing about which
+rules are pinned.
+
+## The budget, stated
+
+The gate says "within memory budget", so here is the budget. It is stated three
+ways on purpose, because each catches a different kind of regression.
+
+**1. Per artefact, measured from outside the process.** Peak working set, 64-bit
+release build, polled every 5 ms:
+
+| artefact | budget | measured at `main` | projected | **measured, built** |
+|---|---:|---:|---:|---:|
+| a(7) rung, raw `.drat` (87.5 MB) | **64 MB** | 182.6 MB — **fails** | 31.1 MB (experiment E) | **31.2 MB — passes**, 51.1 s |
+| a(7) rung, `.lrat` (117.5 MB) | **16 MB** | 5.5 MB — passes | unchanged; the LRAT path is not touched | **5.5 MB — passes**, 2.1 s |
+| a(4) rung, raw `.drat` (2.5 MB) | **16 MB** | 14.1 MB — passes, barely | 9.7 MB | **9.4 MB — passes** |
+
+*The build column is `tools/scale.sh`, same method, same machine, on an idle
+one. Re-measured with the machine busy the a(7) row reads 31.8 MB rather than
+31.2, which is the size of the noise on this figure and is recorded so that a
+later reading inside that band is not mistaken for a regression. The
+projections came from four experiments run on the finished tree and reverted,
+and they were right to within a hundred kilobytes on the artefact the budget is
+stated against — but only after the build found the one line that was missing
+from experiment E; see the lazy-index section. The LRAT row is a control rather
+than an achievement: that path was not touched, and it reads what it read
+before.*
+
+64 MB is chosen as roughly twice what experiment E needs, so that the a(8) rung
+— three to five times larger, and the next thing the author will point at this —
+has somewhere to go before the budget is a lie. It is **open question 1**: the
+number that matters for milestone 4 is a browser's, and the owner sets it.
+
+**2. Structurally, as the property the per-artefact numbers are consequences
+of.** The store's memory is proportional to the **live** database, plus a fixed
+cost per addition, and never to the proof's bytes:
+
+    held ~= 96 B x (largest variable)
+          + O(1) x (literals in live clauses)
+          + 12 B x (additions ever made)
+          + the line being decoded
+
+No general formula is fitted to three data points here, deliberately. The first
+term is the ceiling discussed below; the second is what compaction and the
+`bykey` prune deliver; the third is `clauses`, which this milestone does **not**
+reclaim, and which is 11.4 MB of the a(7) rung's 31.1 MB.
+
+**3. In CI, as counters**, because a peak working set is not portable and not
+assertable. See the test plan: at the end of a run, no `bykey` entry has no live
+clause under it, and the dead part of the arena does not exceed the live part.
+
+**What the budget is not.** `Limits::max_drat_var` is 2^22 and a variable costs
+96 bytes, so a fourteen-byte proof line naming variable 4,194,303 still buys
+about **400 MB** — six times the budget, from a file that fits in a tweet. That
+is a *ceiling*, which exists so the process cannot be made to abort on a failed
+allocation, and it is not a budget. It stays where it is, because lowering it to
+fit the budget would reject legitimate industrial instances with millions of
+variables, and raising the budget to fit it would make the budget meaningless.
+The residual is stated here rather than hidden, exactly as part 3 states the
+residual in its binary sniff.
+
+## Data model
+
+No database, no migrations. Parts 1 to 3's tables stand. Three fields of
+`drat::store::Store` change behaviour, one field is added, and one field of
+`Limits` is added.
+
+| Structure | Change | Why |
+|---|---|---|
+| `Store::lits` | Compacted when the dead part exceeds the live part: live clauses' literals are copied into a fresh `Vec` in identifier order and every live `ClauseMeta::start` is rewritten | 64.0 MB of which 0.5 MB live, at the a(7) rung |
+| `Store::bykey` | The entry is removed when its `Vec<u32>` becomes empty | 96.5 MB of which 1.6 MB live; 748,090 of 762,728 entries dead |
+| `Store::occ` | **Lazy.** `delete` no longer touches it. `resolution_candidates` filters the list by liveness *and* by containment of the negated pivot, writes the filtered list back, and returns it. Compaction purges every list | 31 billion comparisons at the a(7) rung to answer 320 queries |
+| `Store::dead_lits`, `Store::live_lits` | New. Literals in dead and in live clauses, maintained on add and delete | The compaction trigger, and the CI assertion |
+| `Store::compactions` | New. How many compactions ran | `--stats`, and a control: a fixture that must compact asserts this is non-zero |
+| `Store::clauses` | **Unchanged.** One 12-byte `ClauseMeta` per clause ever added, dead or alive | Reclaiming it means an identifier that is not a slot index; see the decision below |
+| `Limits::max_dead_arena_lits` | New. Compact when `dead_lits` exceeds `live_lits` and this floor. Default 1024 | Setting it to 0 forces compaction on every deletion, which is how the fuzz harness reaches this code on small proofs |
+
+**Identifiers do not move.** Compaction rewrites `ClauseMeta::start` and never
+the identifier, so every rejection message names the same clause it names today,
+`next_id` still counts every clause ever added, and the LRAT numbering a reader
+knows is unchanged. This is the property that makes the change invisible from
+outside, and the reason 128 tests can be required to stay green rather than
+re-baselined.
+
+### Compaction, normative
+
+    compact():                       ; only from delete(), with the trail empty
+      fresh = Vec::with_capacity(live_lits + slack)
+      for meta in clauses:                      ; identifier order
+          if !meta.live: meta.start = 0; meta.len = 0; continue
+          fresh.extend(lits[meta.start .. meta.start + meta.len])
+          meta.start = position where those literals just landed
+      lits = fresh
+      dead_lits = 0
+      for slot in occ: retain the ids whose meta is live
+
+Four things are load-bearing:
+
+- **The trail is empty.** Compaction is reachable only from `delete`, which the
+  checker calls only between steps, and every step unwinds itself completely.
+  `assignments == assignments_undone` already asserts that on every positive
+  fixture; this design depends on it, so the identity stops being a nicety.
+
+  *Corrected after the build's mutation pass, which is what this column is for.
+  Compacting with a non-empty trail — the mutation is a `compact()` call at the
+  top of `resolution_candidates` — left every verdict on every fixture correct
+  and killed nothing. It is not a soundness precondition in this design,
+  because compaction touches neither the trail, the assignment nor the watch
+  lists, and the third bullet below is the whole reason. It is a **cost** rule:
+  compaction is O(live literals) and the candidate loop runs once per
+  candidate. `B37` now pins the placement — compaction happens on a deletion
+  and nowhere else — against a proof that has RAT candidates and no
+  deletions.*
+- **The order within a clause is preserved.** The first two literals in the
+  arena are the watched ones, however often `visit` has swapped them. A
+  compaction that sorted, deduplicated or reordered would silently break the
+  watch invariant. It copies the slice.
+- **Nothing outside `ClauseMeta::start` refers to the arena.** `watches`, `occ`,
+  `units` and `bykey` all hold identifiers. That is what makes the remap local,
+  and it is the reason this is a 25-line change rather than a rewrite.
+- **A dead clause's `len` is zeroed.** Not required — dead clauses are already
+  unreachable through every index — but it converts any future stale reference
+  from "reads someone else's literals" into "reads nothing", which is the
+  fail-closed direction.
+
+### The lazy occurrence index, normative
+
+    add(id, lits):      for each literal, push id       ; unchanged
+    delete(id, lits):   nothing                          ; was: linear search + swap_remove
+    resolution_candidates(pivot):
+      want = -pivot
+      kept = [ id in occ[want] : clauses[id].live and lits(id) contains want ]
+      occ[want] = kept
+      return kept
+    compact():          occ[l].retain(id -> clauses[id].live)  for every l
+
+**Completeness is what soundness rests on**, and it is unchanged in shape:
+every clause containing `want` was pushed when it was added, and an identifier
+leaves a list only when its clause is dead. The filter is a *predicate over the
+store*, not a trust in the list: a candidate is returned because it is live and
+because it really does contain the negated pivot, both re-derived at query time.
+An entry that should not be there is dropped; an entry that should be there was
+never removed.
+
+Measured consequence: with compaction purging the lists, the a(7) rung's queries
+examine **384 list entries in total** — one per candidate — against
+31,076,047,076 comparisons for the eager version.
+
+**Built, and it reported exactly that: 384.** Three other things the build
+found, none of them predicted here:
+
+- **`retain` does not give capacity back**, and with deletion no longer
+  clearing entries that capacity is every clause ever added holding the
+  literal. Without a `shrink_to_fit` in the purge the lazy index measures
+  **worse** than the eager one it replaces — 34.1 MB peak working set against
+  31.7 MB — and the build order's own rule would have dropped it. With the
+  shrink: 31.2 MB, and faster. One line decided the design.
+- **Two rejection messages moved**, which the "identifiers do not move"
+  argument above does not cover, because they are not about identifiers.
+  `D1` names candidate 48 where it named 79 and `D5` names 49 where it named
+  80 — same pivot, same reason, same verdict, same candidate set examined. The
+  loop stops at the first candidate whose resolvent is not implied, so which is
+  named depends on the list's order, and eager deletion `swap_remove`d from it:
+  an entry from the end moves into the gap, and the order is one nobody could
+  state. It is now insertion order, so the candidate named is the
+  lowest-numbered one that fails. That is an improvement and it is still a
+  change; both tests carry the old number and the reason beside the new one.
+- **Dropping the containment check kills nothing**, exactly as the mutation
+  table below predicts by predicting nothing. Belt, confirmed as belt.
+
+**Why not the pure scan (D).** It is simpler, and it was measured faster on the
+vdW ladder — 51.6 s against 54.0 s at the a(7) rung. It is also
+`RAT lines x live clauses`, and while every real proof measured has a few
+hundred RAT lines whatever its length, a hand-written proof of N all-RAT lines
+against N live clauses is quadratic, and this project's stated posture is that
+its input is adversarial. The trigger for reversing this, written down as part 3
+wrote its own: **if a real proof reports `occurrence_entries_filtered` greater
+than `rat_additions x peak_live_clauses`, the index is losing and the scan
+should replace it** — one function, `resolution_candidates`, exactly as before.
+
+### Why the metadata array is not reclaimed
+
+`Store::clauses` is 11.4 MB of the a(7) rung's projected 31.1 MB and 12 bytes
+per addition ever made. Reclaiming it means recycling slots, and a slot is
+currently the identifier. Decoupling them costs: a `u64` reported identifier
+stored per live clause, a free list, and — because the occurrence index is now
+lazy — a stale entry that can point at a *reused* slot. That last one is
+survivable (the query-time filter defines candidates by predicate, so a reused
+slot holding a live clause that contains the negated pivot is a genuine
+candidate) but it needs deduplication to keep `rat_candidates_checked` honest,
+and it is exactly the kind of interaction that produces a subtle false accept.
+
+Not worth it at this scale, and the trigger is written down rather than left to
+taste: **when `12 B x additions` exceeds a quarter of the stated budget on an
+artefact the owner actually holds — about 1.4 M additions, which is roughly the
+a(8) rung — reclaim the metadata array, in its own milestone, with its own
+measurement.**
+
+## Interfaces
+
+No public signature changes. `Stats` gains counters, on the same terms as parts
+2 and 3: they exist to be asserted exactly.
+
+```rust
+// checker.rs
+pub struct Stats { /* ... existing ... */
+    /// Bytes the clause store holds at the end of the run: arena capacity,
+    /// metadata, watch and occurrence lists, and the deletion index. Measured
+    /// from capacities, so it is what the process asked the allocator for and
+    /// not what it is using.
+    pub store_bytes: usize,
+    /// Of the arena, the bytes belonging to clauses that are no longer live.
+    pub dead_arena_bytes: usize,
+    /// Of the arena, the bytes belonging to live clauses.
+    pub live_arena_bytes: usize,
+    /// Distinct clauses held by the deletion index. Equal to the number of
+    /// distinct live clause bodies; never to the number ever added.
+    pub deletion_index_entries: usize,
+    /// Arena compactions performed.
+    pub compactions: u64,
+    /// Occurrence-list entries examined by candidate queries, replacing the
+    /// deletion-side maintenance that `occurrence_updates` no longer counts.
+    pub occurrence_entries_filtered: u64,
+}
+
+// limits.rs
+pub struct Limits { /* ... existing ... */
+    /// Compact the clause arena once the literals of dead clauses exceed both
+    /// the literals of live ones and this floor. Zero compacts on every
+    /// deletion, which is what the fuzz harness sets.
+    pub max_dead_arena_lits: usize,
+}
+```
+
+`occurrence_updates` keeps its name and **narrows its meaning to insertions
+only**, because deletion no longer touches the index. That is a deliberate
+re-baseline of three existing assertions and it happens in a commit of its own
+with the reasoning in the message — the same treatment part 3 gave the
+trust-boundary test. The alternative, keeping a counter that counts something
+the code no longer does, is decoration in a place this project does not put it.
+
+`--stats` gains one line, printed only for a DRAT run, beside the two that
+already are:
+
+    refute: <n> KB held, <n> KB live arena, <n> KB dead arena, <n> compactions,
+            <n> deletion index entries, <n> occurrence entries filtered
+
+## Access control
+
+Unchanged: no database, no accounts, no network, no stored state. The untrusted
+input table gains two rows and corrects one.
+
+| Attack | Vector | Control |
+|---|---|---|
+| Memory exhaustion by a proof that only ever adds | Nothing is ever deleted, so nothing is ever reclaimed | Unchanged and inherent: the live database *is* the proof. Now bounded and visible — `store_bytes` reports it, and `12 B x additions` is the only term that grows with a proof whose clauses all survive |
+| Quadratic time from an all-RAT proof | Every line RAT against a database that never shrinks | The occurrence index, whose cost is per literal inserted and per candidate returned. This is the reason the pure scan was rejected despite being faster on every real file |
+| ~~Unbounded allocation from `Vec<Vec<u32>>` at 24 bytes a slot~~ | A proof line naming variable 2^22 | Unchanged, and restated honestly: `max_drat_var` bounds it at about 400 MB, which is a ceiling and not the budget. Part 3's row said "bounded"; it is bounded at six times the budget this milestone states |
+
+## Migrations
+
+None; there is no database. The equivalents table gains two rows.
+
+| # | Change | Reversible? | Rollback |
+|---|---|---|---|
+| 8 | `Store` reclaims: arena compaction, `bykey` pruning, lazy `occ`. `Limits` gains `max_dead_arena_lits`; `Stats` gains six counters | Yes | `git revert`. No public signature moves, no verdict string moves, no exit code moves. A 0.1.0 crate with no dependants |
+| 9 | `occurrence_updates` narrows to insertions; three `--stats` assertions re-baselined | Yes | `git revert`. It is a counter on a diagnostic line, not a contract |
+
+## Failure modes
+
+Parts 1 to 3's tables stand. What part 4 adds:
+
+| What breaks | Who notices | How we detect it | How we undo it |
+|---|---|---|---|
+| **False `VERIFIED` from a compaction that remaps a clause to the wrong literals** — the serious one, and new | Nobody, for months | `s01`, a store unit test that records every live clause before a forced compaction and compares after; `d13`, a hand-built proof over a **satisfiable** formula with `max_dead_arena_lits = 0` so every deletion compacts; and the full fuzz run with forced compaction, where a formula with a model has no refutation whatever the mutation was | Revert; withdraw any claim citing Refute in the same session |
+| False `VERIFIED` from the lazy index dropping a live entry | Nobody | `d14`: a candidate that must be found after enough deletions to force a purge, over a satisfiable formula. The mutation-kill row for the retain predicate | As above |
+| False rejection from `bykey` pruning an entry with a live copy left | The author, on a real certificate | Prunes only when the list is empty; `s02` deletes one of three copies and asserts the other two still delete. The a(4) rung would fail outright, since 39 of its additions duplicate a live clause | Fix; the rule is one branch |
+| Compaction runs so often it dominates | Anyone with a large proof | `compactions` in `--stats`, and the ladder table. Measured at 44 compactions and a net *saving* of 6 s on the a(7) rung | Raise `max_dead_arena_lits` |
+| The budget is quietly exceeded by a bigger artefact | The author, when it swaps | `store_bytes`, and the scale harness re-run on the ladder. The counter controls fail in CI long before the working set does | The metadata trigger above; then a milestone |
+| A stale occurrence entry survives into a reused identifier | Nobody | Cannot happen: identifiers are never reused. This is written down because it is precisely what reclaiming the metadata array would introduce | — |
+
+## Rollback
+
+`git revert` plus `cargo build`, under a minute. No database, no deployment, no
+persistent state, no consumer contract: exit codes, verdict strings and every
+command line are untouched, and the only observable difference is three numbers
+on a `--stats` line.
+
+The irreversible act is unchanged and is **publishing a claim** — here, that the
+largest certificate behind a published term has been checked by a second
+implementation inside a stated budget. The order is hard, and it is part 3's
+order with the fuzz run promoted, because the store it exercised has been
+rewritten:
+
+1. the whole suite green on stable and on 1.74.0, in debug and release;
+2. the mutation-kill pass complete, with a named test dying for every new rule;
+3. `tools/differential.sh` re-run, including the vdW rungs by `--extra`;
+4. **`tools/fuzz.py` re-run to 10,000 cases with `max_dead_arena_lits = 0`, zero
+   false accepts** — not the milestone-2 run quoted, a new one;
+5. the scale harness run on the whole ladder, its table recorded with the method
+   and the machine's role stated;
+6. *then* any claim about the a(7) rung, in the README or anywhere else.
+
+Quoting milestone 2's fuzz result for milestone 3's store is the one thing here
+that cannot be taken back.
+
+## Test plan
+
+Framework unchanged: `cargo test`, no test dependencies, committed fixtures, CI
+with neither binary. **The corpus is at 496 KB of its 500 KB budget, so this
+milestone adds no fixture bytes**: every new control is an inline formula and
+proof in `tests/drat.rs`, or a unit test on the store, both of which the file
+already uses.
+
+### What "red first" means here
+
+A memory rule cannot be made red by demanding a verdict, because every variant
+measured produces the same verdict. So:
+
+- **The counter controls are genuinely red.** `store_bytes`,
+  `dead_arena_bytes`, `deletion_index_entries` and `compactions` do not exist,
+  so the tests do not compile until the counters do, and once they compile they
+  fail on the numbers the current store produces. The commit that records the
+  red states which is which.
+- **The safety controls are green for the wrong reason** if they only assert a
+  rejection: today there is no compaction to break, so `d13` and `d14` pass
+  before the code exists. They are therefore written against a store with
+  `max_dead_arena_lits = 0`, and the commit that adds compaction is the one that
+  makes them meaningful. Their real evidence is the mutation-kill table, and the
+  table is mandatory content of the milestone.
+
+### Positive — must return `Verified`, exit 0
+
+| # | Input | Asserts |
+|---|---|---|
+| P19 | `rat_pigeonhole.drat` with `max_dead_arena_lits = 0` | Verifies. **Same verdict and same counters** as with the default: additions, deletions, peak live, assignments, propagations, watch visits and candidates checked all unchanged. This is the whole safety argument for compaction, made assertable |
+| P20 | every committed `.drat` fixture, with `max_dead_arena_lits = 0` | Verdict identical to the default run, fixture by fixture. Cheap, and it is the regression net for all of milestones 2 and 3 |
+| P21 | `vdw_a217058_n21.drat` | Verifies, and `deletion_index_entries` equals the live clause count at the end, not the 559 additions |
+| all | every positive | `assignments == assignments_undone` and `rup + rat + tautological == additions`, unchanged |
+
+### Negative — must not print `s VERIFIED`; exit non-zero, exact reason asserted
+
+| # | Input | Expected |
+|---|---|---|
+| D13 | Hand-built proof over a **satisfiable** formula, enough deletions to force several compactions at `max_dead_arena_lits = 0`, whose last step is only justified if a compacted clause kept its literals | `RatCheckFailed` or `NoConflict`, asserted exactly. A compaction that mixes two clauses' literals verifies this |
+| D14 | Hand-built proof over a **satisfiable** formula where the RAT candidate that refutes the lemma is added early, survives a purge, and must still be found | `RatCheckFailed`, naming the candidate. A purge that drops live entries verifies this |
+| D15 | A clause added three times and deleted twice, then a lemma that is only RAT because the third copy is still live, over a **satisfiable** formula | Rejection. A `bykey` prune that drops the entry while copies remain verifies this |
+| D1–D12 | existing | Unchanged, and re-run with `max_dead_arena_lits = 0` |
+
+### Boundary
+
+| # | Input | Expected |
+|---|---|---|
+| B37 | `max_dead_arena_lits = 0` on a proof with **no** deletions | No compaction, `compactions == 0`, verdict unchanged |
+| B38 | A proof that deletes every clause it adds, then adds the empty clause | Verdict unchanged; `dead_arena_bytes <= live_arena_bytes` at the end; `deletion_index_entries` back to the formula's live clauses |
+| B39 | Deletion of a clause whose literals are the same set in a different order, after a compaction | Deleted. Compaction must not disturb the normalised key |
+| B40 | A unit clause deleted after a compaction | Honoured, as B25 requires; the `units` list holds identifiers and compaction does not touch it |
+| B41 | The longest line in the committed corpus, with `max_line_bytes` at its default | Parses. The measurement that kept the ceiling where it is: 155 bytes of real DRAT against 16 MB |
+| B42 | Every literal of a live clause is still exactly what it was, across a forced compaction, for a fixture with 700 additions and 487 deletions | Equality, clause by clause. The store unit test |
+| B1–B36 | existing | Unchanged |
+
+### The mutation-kill table
+
+Mandatory. For each rule: the change to make in the source, and the test that
+must fail when it is made. **The measured column is filled in during the build
+and any wrong prediction is corrected there rather than quietly re-aimed** —
+part 3 got three of eleven wrong and said so.
+
+The design's P19 and P20 land as **P22** and **P23**: P19 through P21 were
+already taken by milestone 2 and by the counter controls, the same renumbering
+the milestone-1b record carries.
+
+| Rule | Source mutation | Test that must die | Measured |
+|---|---|---|---|
+| Compaction preserves each clause's literals and their order | copy `meta.len - 1` literals | B42, P22, P23 | **14 tests**, including all three, plus S01, D13, D14, B38, P15, P16, P19, P21 |
+| Compaction rewrites `start` for every live clause | rewrite only the first | B42, D13, S01 | **11 tests**, including all three |
+| Compaction runs only with the trail empty | call it from inside the candidate loop | P19, `assignments == assignments_undone` | **NOTHING**, first time. Every verdict stayed correct — it is a cost rule, not a soundness one; see the correction above. B37 was widened to a RAT-carrying proof with no deletions and now kills it |
+| The dead arena is bounded | never compact | B38's counter assertion | B38, B42, S01, `compaction_is_visible_in_the_size_the_store_reports`, `forced_compaction_actually_compacts` |
+| `bykey` drops only empty entries | drop the entry on any deletion | D15, P21, a store unit test | D15, S02, `a_deletion_removes_exactly_one_of_two_copies`, `compaction_is_visible…`, **and P15 — a real proof failing outright**. P21 did **not** die: pruning early makes the index *smaller* and P21's bound is an upper one |
+| `bykey` still holds live copies | prune on the first delete of a duplicated clause | D15, and the a(4) rung outright | the same mutation as the row above; the "rung outright" prediction landed on P15, a committed fixture |
+| The occurrence purge keeps live entries | invert the retain predicate | D14, P14, P15 | D13 and D14. **P14 and P15 did not die**: they run at the default floor and never compact on that fixture, so there is no purge to break |
+| The query filter keeps entries that contain the pivot | drop the containment check | nothing should die — it is belt, not brace; if something does, the design is wrong about which | **NOTHING.** The one row predicted correctly by predicting nothing |
+| The query filter drops dead entries | keep them | D14 or a counter; recorded either way | **8 tests**: D1, D2, D5, B39, P23 and three store unit tests |
+| `store_bytes` counts the arena | report only metadata | B38 | **NOTHING** on the first two attempts; see below. Now `the_reported_size_covers_the_arena_and_the_occurrence_index` |
+| `store_bytes` counts the occurrence index | drop the `occ` term | *(added during the build)* | the same test |
+| The occurrence purge returns capacity | remove `shrink_to_fit` | *(added during the build)* | **NOTHING**, correctly: it is 3 MB on the a(7) rung's peak and no rule at all |
+
+Two of these are expected to fail in the **false rejection** direction and the
+table will say which, as part 3's does. A row whose mutation kills nothing is a
+finding, not a formality: it means the rule is unpinned, and the fixture for it
+is written in the same step.
+
+**The `store_bytes` row took three attempts and is worth the space**, because
+the two that failed both looked right.
+
+The arena cannot be told apart from the occurrence index by *size*. The index
+holds one 4-byte identifier per literal of every clause added and the arena
+holds one 4-byte literal, so the two terms are equal by construction and any
+`>=` assertion against a single reported figure passes with either one of them
+dropped. That is why `the_drat_store_reports_the_bytes_it_holds` — which does
+assert `live + dead <= store_bytes` — never noticed.
+
+*Attempt two* compared a run that compacted against one that did not, on the
+reasoning that compaction rebuilds the arena at the live size and leaves the
+index alone. It discriminated at build order step 6 and stopped at step 7,
+when the purge learnt to `shrink_to_fit` and both terms started moving
+together. It is kept as
+`compaction_is_visible_in_the_size_the_store_reports`, because "compaction
+changes the size the store reports" is still a real property, but it is no
+longer claimed to pin more than that.
+
+*Attempt three* stops comparing totals. It measures the arena and the index
+**independently, from the containers themselves**, and requires the reported
+figure to cover both — on 200 copies of one 50-literal clause, so that
+duplicates collapse the deletion index and leave those two terms dominant. It
+kills the arena mutation and the matching `occ` mutation, and both were run.
+
+A ratio assertion — "the store holds each literal at least twice" — would also
+have worked and was rejected: it pins an implementation proportion rather than
+a rule, and would go red on the next honest change to either structure.
+
+### Differential harness and fuzz (not CI)
+
+- `tools/differential.sh` unchanged in shape, re-run in full. The vdW rungs
+  arrive by `--extra`, and the ladder now goes to the a(7) rung.
+- `tools/fuzz.py` gains `--force-compaction`, which sets
+  `max_dead_arena_lits = 0` through the CLI, and the 10,000-case gate is re-run
+  under it. Random proofs are small and delete little, so without the flag the
+  new code path is reached by almost none of the 10,000 cases — a harness that
+  never enters the code it is guarding is decoration.
+
+  *Built, and the sentence above needed a measurement rather than a belief. The
+  flag does not make every case reach the code and cannot: a proof that deletes
+  nothing has nothing to reclaim at any floor, and `kissat` writes plenty of
+  those on small random instances — measured, on the harness's own shapes, one
+  refutation with 150 deletions compacting once and one with none compacting
+  never. So the harness now **counts** the comparisons whose run reported a
+  non-zero `compactions` and prints the fraction in its summary. Saying which
+  part of a gate was exercised is the difference between a gate and a claim
+  about one.
+  
+  Measured at **12.6 per cent** — 463 of 3,685 comparisons — on a 1,200-case
+  run at the same seed. A 40-case sample taken first said 22.9 per cent, which
+  is what a 40-case sample is worth; the smaller figure is the one to quote.*
+
+  **The gate, run:**
+
+      refute flags     --max-dead-arena-lits=0
+      cases            10000 (2938 unsatisfiable, 7062 satisfiable)
+      comparisons      30564
+      harmless mutants 10768 (39.0% still verified by both)
+      strict wins      257 (all on the documented list)
+      false accepts    0
+
+  A new run and not milestone 2's, as the rollback section requires: the store
+  it exercises has been rewritten three times since that one. The
+  harmless-mutant rate is 39.0 per cent against milestone 2's 39.3 on a fifth
+  of the cases, which is the check that the mutator has not quietly stopped
+  mutating, and 257 strict wins are all on the documented list — none is a
+  strictness nobody wrote down.
+
+### The scale harness
+
+`tools/scale.sh`, beside `differential.sh` and reading the same
+`$KISSAT` / `$DRAT_TRIM` / `$REFUTE` or flags, never a path in a tracked file.
+Given a directory of `.cnf` / `.drat` pairs it prints one row per artefact:
+bytes, additions, peak live clauses, wall clock, peak working set, and the same
+for `drat-trim -f` beside it. Peak working set is read from the OS per platform;
+where it cannot be, the column says so rather than guessing. Nothing about this
+runs in CI, and nothing it measures is a test.
+
+## Build order
+
+1. Branch `design/milestone-3`. Documents only: this part, the PRD's milestone-3
+   section, the App Flow delta. **Commit.**
+2. `Stats` gains the six counters, computed from the store as it is today, and
+   `--stats` prints the new line. No behaviour change. The counters report the
+   waste: this commit is what makes the problem visible from the command line.
+3. Write P19–P21, D13–D15 and B37–B42 against **this** binary. Run. Paste the
+   failing output into the commit message, marking which are red because the
+   counters are wrong and which because the rule does not exist yet. **Commit
+   red. This commit is the evidence for the milestone.**
+4. `Limits::max_dead_arena_lits`, plumbed to the CLI as a hidden flag for the
+   fuzz harness. Nothing consumes it yet.
+5. **`bykey` pruning.** One branch. D15 and P21 go green. Re-measure the ladder
+   and record the footprint: expected 179.8 MB to 84.8 MB at the a(7) rung.
+6. **Arena compaction**, with the store unit tests (B42, `s01`, `s02`) written
+   first in this commit. B38, D13 go green. Re-measure: expected 84.8 MB to
+   22.2 MB, and *record the time*, which experiment B measured as a 6 s saving
+   and which must be reported whichever way it comes out.
+7. **The lazy occurrence index**, and the `occurrence_updates` re-baseline **in
+   its own commit** with the reasoning in the message. D14 goes green. Re-measure.
+8. Full suite on stable and on 1.74.0, both profiles.
+9. The mutation-kill pass, every row, output recorded, wrong predictions
+   corrected in the table.
+10. `tools/scale.sh`; run it on the whole ladder; paste the table.
+11. `tools/differential.sh` re-run, including the rungs by `--extra`.
+12. `tools/fuzz.py --force-compaction`, 10,000 cases, zero false accepts, summary
+    pasted.
+13. **Only now:** the budget's measured figures into this document beside the
+    projections, the README's scale paragraph, `SESSION_HANDOFF.md`.
+14. Push the branch. CI green on all five jobs. Stop; merging is the owner's.
+
+Steps 5, 6 and 7 are separable and each is measured on its own. **If step 7
+measures worse than step 6 on the ladder, it is dropped** and the eager index
+stays, with the numbers recorded — the same treatment part 3's batching
+experiment got.
+
+## Open questions
+
+1. **Is 64 MB the right budget?** PRD milestone-3 question 1. It is set by what
+   the a(7) rung needs with headroom, not by a browser, and milestone 4's
+   ceiling is the one that will matter. Changing it changes a number in this
+   document and one assertion in the scale harness. **Blocks calling the
+   milestone done, not starting it.**
+2. **Does the ladder become a documented local gate?** PRD milestone-3
+   question 2. Nothing above n=21 can be committed. Proposed: `tools/scale.sh`
+   reading a directory, exactly as `differential.sh --extra` does. *Not a
+   blocker.*
+3. **Should `store_bytes` be reported for the LRAT path too?** It is 5.5 MB on
+   the a(7) rung's LRAT and the path is not touched by this milestone, so the
+   counter would be a second implementation of the same idea over a different
+   database. Proposed: no, and the `--stats` line stays DRAT-only, as part 3's
+   does. *Not a blocker; one commit either way.*

@@ -14,6 +14,17 @@ use refute::{check_readers, check_readers_with_format, Format, Limits, Verdict};
 const USAGE: &str =
     "usage: refute [check] <formula.cnf> <proof.lrat|proof.drat> [--drat|--lrat] [--stats]";
 
+/// The one flag `USAGE` does not list, and deliberately.
+///
+/// It sets `Limits::max_dead_arena_lits`, which decides when the DRAT store
+/// compacts its arena. It exists so that `tools/fuzz.py --force-compaction`
+/// can drive ten thousand random proofs through code that a random proof would
+/// otherwise almost never reach: they are small and they delete little. It
+/// changes no verdict on any input — that is the property the fuzz run is
+/// there to test — so documenting it in the usage line would advertise a knob
+/// with nothing for a user to gain by turning it.
+const DEAD_ARENA_FLAG: &str = "--max-dead-arena-lits=";
+
 /// Verified. The only success.
 const EXIT_VERIFIED: u8 = 0;
 /// Read and found wanting, including anything that failed to parse.
@@ -26,6 +37,26 @@ const EXIT_USAGE: u8 = 3;
 
 fn main() -> ExitCode {
     ExitCode::from(run())
+}
+
+/// Bytes as kilobytes, truncating, but never `0` for something that is there.
+///
+/// The figures this prints are megabytes on the proofs the counter exists for,
+/// so kilobytes is the right unit and truncation costs nothing. On a small
+/// proof it costs something real: `0 KB live arena` on a database that holds
+/// forty clauses reads as "nothing is live", which is the opposite of true.
+/// `<1` says the same thing about the size and nothing untrue about the
+/// contents.
+///
+/// Division is a method call rather than `/` because the package denies
+/// arithmetic operators and a literal divisor is not an exception the lint
+/// makes.
+fn kb(bytes: usize) -> String {
+    match bytes {
+        0 => "0".to_owned(),
+        n if n < 1024 => "<1".to_owned(),
+        n => n.saturating_div(1024).to_string(),
+    }
 }
 
 fn run() -> u8 {
@@ -54,6 +85,7 @@ fn run() -> u8 {
     let mut stats = false;
     let mut flags_ended = false;
     let mut forced: Option<Format> = None;
+    let mut dead_arena_lits: Option<usize> = None;
     for arg in &args {
         if flags_ended {
             positional.push(arg);
@@ -72,6 +104,21 @@ fn run() -> u8 {
             "--help" | "-h" | "--version" | "-V" => {
                 eprintln!("{USAGE}");
                 return EXIT_USAGE;
+            }
+            // A bad value is a usage error and not a verdict, because nothing
+            // about the proof was in question. Same treatment as a missing
+            // path: exit 3, so a typo cannot read as a pass.
+            other if other.starts_with(DEAD_ARENA_FLAG) => {
+                match other
+                    .get(DEAD_ARENA_FLAG.len()..)
+                    .and_then(|value| value.parse::<usize>().ok())
+                {
+                    Some(lits) => dead_arena_lits = Some(lits),
+                    None => {
+                        eprintln!("refute: '{other}' needs a non-negative number");
+                        return EXIT_USAGE;
+                    }
+                }
             }
             other => positional.push(other),
         }
@@ -112,7 +159,10 @@ fn run() -> u8 {
 
     let formula = BufReader::new(formula_file);
     let proof = BufReader::new(proof_file);
-    let limits = Limits::default();
+    let mut limits = Limits::default();
+    if let Some(lits) = dead_arena_lits {
+        limits.max_dead_arena_lits = lits;
+    }
     let outcome = match forced {
         Some(format) => check_readers_with_format(formula, proof, &limits, format),
         None => check_readers(formula, proof, &limits),
@@ -164,6 +214,24 @@ fn run() -> u8 {
                 counters.propagations,
                 counters.watch_visits,
                 counters.occurrence_updates
+            );
+            // What the store holds, beside what it did. A memory rule cannot
+            // be pinned by a verdict — every store variant `docs/TDD.md`
+            // part 4 measured returned the same verdict on every artefact —
+            // so it is pinned by these, and a counter a reader cannot see on
+            // their own proof is not the control the milestone is buying.
+            // Kilobytes truncate: a fixture small enough to report 0 KB is a
+            // fixture whose store was never the question.
+            eprintln!(
+                "refute: {} KB held, {} KB live arena, {} KB dead arena, \
+                 {} compactions, {} deletion index entries, \
+                 {} occurrence entries filtered",
+                kb(counters.store_bytes),
+                kb(counters.live_arena_bytes),
+                kb(counters.dead_arena_bytes),
+                counters.compactions,
+                counters.deletion_index_entries,
+                counters.occurrence_entries_filtered
             );
         }
     }
