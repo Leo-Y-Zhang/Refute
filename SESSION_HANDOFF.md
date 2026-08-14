@@ -1,20 +1,21 @@
 # Session handoff
 
-**State:** milestones 1, 1b and 2 are on `main` (`0941aa5`). **Milestone 3 —
-scale and memory — is BUILT on `feat/milestone-3`**, build order steps 2
-through 13 of `docs/TDD.md` part 4, 151 tests green on stable and on 1.74.0 in
-both profiles. Not merged: merging is the owner's.
+**State:** milestones 1, 1b, 2 and **3** are on `main` (`294df83`), 151 tests
+green on stable and on 1.74.0 in both profiles, CI green on all five jobs.
+Nothing is in flight.
 
-*This paragraph has been wrong twice, in the same direction both times, because
-it gets written before the merge and not after it. So it says what `git log`
-says and nothing else.*
+*This paragraph was wrong twice, in the same direction both times, because it
+kept being written before the merge instead of after it. It is now written
+after: `294df83` is the merge commit, and `git log` is the only source for
+this line.*
 
 ## Exact next step
 
-**Push the branch, read the five CI jobs, and stop.** That is build order step
-14 and it is the only step left. Merging `feat/milestone-3` into `main` is the
-owner's decision, and two questions below want an answer first — neither blocks
-the merge mechanically, and one of them is the number the README now prints.
+**Nothing is owed.** Milestone 4 — the WASM playground — is designed in
+`docs/PRD.md` and `docs/APP_FLOW.md` part 2 and has no TDD part yet, so the
+next piece of work is to write one, measurement-first, the way part 4 was.
+Three questions below want the owner before that starts; the first of them
+sets a number milestone 4 inherits.
 
 ## What milestone 3 did, in one line each
 
