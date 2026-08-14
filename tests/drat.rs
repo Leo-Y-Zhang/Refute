@@ -601,3 +601,45 @@ fn the_drat_counter_line_is_printed_only_for_a_drat_run() {
         drat.stderr
     );
 }
+
+/// D11: a unit clause is a resolution candidate like any other.
+///
+/// The occurrence index is the only source of the RAT candidate set. A checker
+/// that skips short clauses while building it never resolves the lemma against
+/// the unit that refutes it, and so accepts a proof of a SATISFIABLE formula.
+/// That mutant leaves 123 of the 124 tests green, and the one it fails asserts
+/// a `--stats` counter -- a number the next index tuning would re-baseline
+/// away. A false accept has to be pinned by a verdict, so this asserts one.
+#[test]
+fn d11_a_unit_clause_is_a_resolution_candidate() {
+    // 1 = false, 2 = true satisfies the formula, so "1" cannot be added to it.
+    let outcome = inline("p cnf 2 2\n-1 0\n2 0\n", "1 0\n0\n");
+    let rejection = rejection(outcome.verdict);
+    assert_eq!(
+        rejection.reason,
+        Reason::RatCheckFailed {
+            pivot: refute::Lit::new(1).expect("a non-zero pivot")
+        }
+    );
+}
+
+/// D12: a repeated literal is not read as `x or not x`.
+///
+/// `assume_negated` walks the negated lemma onto the trail, and a repeat of the
+/// same literal is a repeat, not a contradiction. Reading it as one makes the
+/// assumption fail, which reports the lemma as vacuously implied and accepts it
+/// before anything has been checked. B27 asserts that a *valid* repeated-literal
+/// lemma verifies, which does not distinguish the two; this asserts that an
+/// invalid one is refused, on a formula that has a model.
+#[test]
+fn d12_a_repeated_literal_is_not_read_as_a_tautology() {
+    // 1 = true satisfies the formula, so neither "-1" nor "-2" can be added.
+    let outcome = inline("p cnf 2 1\n1 2 0\n", "-1 -1 0\n-2 -2 0\n0\n");
+    let rejection = rejection(outcome.verdict);
+    assert!(
+        matches!(rejection.reason, Reason::RatCheckFailed { .. }),
+        "{:?}",
+        rejection.reason
+    );
+    assert_eq!(rejection.step, Some(2));
+}
