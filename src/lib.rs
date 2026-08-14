@@ -22,14 +22,20 @@
 
 pub mod checker;
 pub mod cnf;
+pub mod drat;
+pub mod format;
 pub mod limits;
 pub mod lit;
 pub mod lrat;
 pub mod parse;
 pub mod verdict;
 
-pub use checker::{check, check_readers, check_with_stats, Outcome, Stats};
+pub use checker::{
+    check, check_readers, check_readers_with_format, check_with_stats, Outcome, Stats,
+};
 pub use cnf::{parse_dimacs, Cnf};
+pub use drat::{DratReader, DratStep};
+pub use format::Format;
 pub use limits::Limits;
 pub use lit::{Clause, ClauseId, Lit};
 pub use lrat::{Hints, LratReader, ResolventBlock, Step};

@@ -22,7 +22,8 @@ use crate::cnf::io_kind;
 use crate::limits::Limits;
 use crate::lit::{ClauseId, Lit};
 use crate::parse::{
-    scan_i64, scan_id, scan_lit, strip_byte_order_mark, ParseError, ParseErrorKind, Source,
+    push_bounded, scan_i64, scan_id, scan_lit, strip_byte_order_mark, ParseError, ParseErrorKind,
+    Source,
 };
 
 /// One resolvent block: the clause resolved against, and its own hints.
@@ -113,27 +114,27 @@ impl<R: BufRead> LratReader<R> {
         }
     }
 
-    /// Recognises a binary proof from its first byte, before any decoding.
+    /// Recognises a binary proof from the head of the file, before any
+    /// decoding.
     ///
-    /// Binary DRAT and binary LRAT begin every record with `a` (0x61) or `d`
-    /// (0x64); a text LRAT line always begins with a decimal step identifier,
-    /// and a deletion is `<id> d ...`, so the first byte of a text proof is
-    /// never either of these. `kissat` writes binary unless it is told
-    /// `--no-binary`, which makes this the commonest way to hand a checker
-    /// something it cannot read.
+    /// `kissat` writes binary unless it is told `--no-binary`, which makes
+    /// this the commonest way to hand a checker something it cannot read.
+    ///
+    /// The rule itself now lives in [`crate::format::looks_binary`], because
+    /// milestone 2 gave the project a second text format whose deletion lines
+    /// open with the very byte this used to treat as decisive. One rule, two
+    /// readers, one place to be wrong. Widening it cannot have cost this
+    /// milestone anything: no text LRAT line opens with `a` or `d` at all.
     ///
     /// Done on the raw bytes rather than on a decoded line because a binary
     /// proof need not be valid UTF-8, and a read that fails to decode would
-    /// report an I/O error instead. It is the first byte of the *file*, which
-    /// is narrower than `docs/TDD.md` part 2's "first non-empty line": the
-    /// narrowing can only fail to recognise a binary proof, leaving milestone
-    /// 1's parse error in place, and has no route to a false `VERIFIED`.
+    /// report an I/O error instead.
     fn is_binary(&mut self) -> bool {
         self.sniffed = true;
         match self.reader.fill_buf() {
             // A read error here is left to the read below, which reports it
             // with a line number.
-            Ok(buffered) => matches!(buffered.first(), Some(b'a') | Some(b'd')),
+            Ok(buffered) => crate::format::looks_binary(buffered),
             Err(_) => false,
         }
     }
@@ -212,6 +213,13 @@ impl<R: BufRead> Iterator for LratReader<R> {
             };
         }
     }
+}
+
+/// True when this line is a well-formed LRAT step. The acceptance half of
+/// [`crate::format::detect`], and the parser itself rather than a description
+/// of it.
+pub(crate) fn accepts(line: &str, limits: &Limits) -> bool {
+    parse_step(line, 1, limits).is_ok()
 }
 
 fn parse_step(line: &str, line_no: u64, limits: &Limits) -> Result<Step, ParseErrorKind> {
@@ -318,14 +326,4 @@ fn parse_step(line: &str, line_no: u64, limits: &Limits) -> Result<Step, ParseEr
         hints,
         line: line_no,
     })
-}
-
-fn push_bounded<T>(target: &mut Vec<T>, value: T, limits: &Limits) -> Result<(), ParseErrorKind> {
-    if target.len() >= limits.max_clause_len {
-        return Err(ParseErrorKind::ListTooLong {
-            limit: limits.max_clause_len,
-        });
-    }
-    target.push(value);
-    Ok(())
 }
