@@ -9,9 +9,10 @@ use std::io::BufReader;
 use std::path::Path;
 use std::process::ExitCode;
 
-use refute::{check_readers, Limits, Verdict};
+use refute::{check_readers, check_readers_with_format, Format, Limits, Verdict};
 
-const USAGE: &str = "usage: refute <formula.cnf> <proof.lrat> [--stats]";
+const USAGE: &str =
+    "usage: refute [check] <formula.cnf> <proof.lrat|proof.drat> [--drat|--lrat] [--stats]";
 
 /// Verified. The only success.
 const EXIT_VERIFIED: u8 = 0;
@@ -52,6 +53,7 @@ fn run() -> u8 {
     let mut positional: Vec<&str> = Vec::new();
     let mut stats = false;
     let mut flags_ended = false;
+    let mut forced: Option<Format> = None;
     for arg in &args {
         if flags_ended {
             positional.push(arg);
@@ -62,6 +64,11 @@ fn run() -> u8 {
             // `--help` can still be checked.
             "--" => flags_ended = true,
             "--stats" => stats = true,
+            // Skip detection entirely. A file that then fails to parse is a
+            // rejection and not a usage error: the user made a claim about the
+            // file and the file contradicted it, which is a verdict.
+            "--drat" => forced = Some(Format::Drat),
+            "--lrat" => forced = Some(Format::Lrat),
             "--help" | "-h" | "--version" | "-V" => {
                 eprintln!("{USAGE}");
                 return EXIT_USAGE;
@@ -70,7 +77,17 @@ fn run() -> u8 {
         }
     }
 
-    let (formula_path, proof_path) = match positional.as_slice() {
+    // `refute check <cnf> <proof>` is the same command as `refute <cnf>
+    // <proof>`. The two-positional form is a documented contract that twelve
+    // tests assert, so the verb is additive: accepted only when there are
+    // exactly three positional arguments and the first is `check`. A file
+    // genuinely called `check` is still reachable, as `refute -- check b.drat`
+    // or by any path with a separator in it.
+    let paths: &[&str] = match positional.as_slice() {
+        [verb, rest @ ..] if *verb == "check" && rest.len() == 2 && !flags_ended => rest,
+        other => other,
+    };
+    let (formula_path, proof_path) = match paths {
         [formula, proof] => (Path::new(formula), Path::new(proof)),
         _ => {
             eprintln!("{USAGE}");
@@ -93,11 +110,13 @@ fn run() -> u8 {
         }
     };
 
-    let outcome = check_readers(
-        BufReader::new(formula_file),
-        BufReader::new(proof_file),
-        &Limits::default(),
-    );
+    let formula = BufReader::new(formula_file);
+    let proof = BufReader::new(proof_file);
+    let limits = Limits::default();
+    let outcome = match forced {
+        Some(format) => check_readers_with_format(formula, proof, &limits, format),
+        None => check_readers(formula, proof, &limits),
+    };
 
     for warning in &outcome.warnings {
         eprintln!("refute: warning: {warning}");
@@ -131,6 +150,22 @@ fn run() -> u8 {
             counters.candidates_examined,
             counters.resolution_candidates
         );
+        // Only when the DRAT checker ran, so the block is never a wall of
+        // zeroes. `occurrence updates` is the one performance bet in milestone
+        // 2, made observable on a reader's own proof rather than re-argued
+        // from the design's measurements.
+        if outcome.format == Format::Drat {
+            eprintln!(
+                "refute: {} RUP additions, {} tautological, {} candidates checked, \
+                 {} propagations, {} watch visits, {} occurrence updates",
+                counters.rup_additions,
+                counters.tautological_additions,
+                counters.rat_candidates_checked,
+                counters.propagations,
+                counters.watch_visits,
+                counters.occurrence_updates
+            );
+        }
     }
 
     // One match, no wildcard arm: a new verdict variant must be handled here

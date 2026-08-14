@@ -17,7 +17,15 @@
 #
 # or pass --kissat / --drat-trim. --extra <dir> adds every .cnf in a directory,
 # so that certificates built elsewhere can be included without this repository
-# depending on another one.
+# depending on another one. If a .drat sits beside a .cnf in that directory it
+# is used rather than re-solving, which is the shape a certificate generator
+# writes with a --keep option.
+#
+# Milestone 2 adds the second pair of columns: drat-trim -f and refute on the
+# RAW proof, with drat-trim in the chain neither as checker nor as producer.
+# Forward mode, never the default -- backward checking only checks the lemmas
+# it keeps, so it verifies mutants a forward checker rejects and is not a valid
+# oracle for one.
 set -uo pipefail
 
 kissat="${KISSAT:-}"
@@ -70,37 +78,57 @@ PY
 
 if [ -n "$extra" ]; then
     cp "$extra"/*.cnf "$work"/ || { echo "no .cnf files in $extra" >&2; exit 2; }
+    cp "$extra"/*.drat "$work"/ 2>/dev/null || true
 fi
 
-printf '%-22s %6s  %-14s  %-14s  %s\n' instance bytes drat-trim refute agree
+verdict_of() {
+    if "$@" | grep -q '^s VERIFIED'; then
+        echo "s VERIFIED"
+    else
+        echo "s NOT VERIFIED"
+    fi
+}
+
+printf '%-22s %9s %9s  %-13s %-13s  %-13s %-13s  %s\n' \
+    instance drat lrat 'dt -f' refute 'dt -L' refute agree
 status=0
 for cnf in "$work"/*.cnf; do
     name="$(basename "$cnf" .cnf)"
 
-    "$kissat" --no-binary -q "$cnf" "$work/$name.drat" >/dev/null 2>&1
-    rc=$?
+    if [ -f "$work/$name.drat" ]; then
+        # A certificate generator kept its raw proof. Re-solving would produce
+        # a different one, and this row would then be about the solver rather
+        # than about the file the author published.
+        rc=20
+    else
+        "$kissat" --no-binary -q "$cnf" "$work/$name.drat" >/dev/null 2>&1
+        rc=$?
+    fi
     if [ "$rc" -ne 20 ]; then
-        printf '%-22s %6s  %-14s  %-14s  %s\n' "$name" - "kissat=$rc" - SKIPPED
+        printf '%-22s %9s %9s  %-13s %-13s  %-13s %-13s  %s\n' \
+            "$name" - - "kissat=$rc" - - - SKIPPED
         continue
     fi
 
-    if "$drat_trim" "$cnf" "$work/$name.drat" -L "$work/$name.lrat" \
-        | grep -q '^s VERIFIED'; then
-        theirs="s VERIFIED"
-    else
-        theirs="s NOT VERIFIED"
-    fi
+    # The raw proof, both ways: the milestone-2 pair, with drat-trim in the
+    # chain neither as checker nor as producer.
+    raw_theirs="$(verdict_of "$drat_trim" "$cnf" "$work/$name.drat" -f)"
+    raw_ours="$("$refute" "$cnf" "$work/$name.drat" 2>/dev/null | head -1)"
 
+    # The trimmed proof, both ways: the milestone-1b pair, unchanged.
+    theirs="$(verdict_of "$drat_trim" "$cnf" "$work/$name.drat" -L "$work/$name.lrat")"
     ours="$("$refute" "$cnf" "$work/$name.lrat" 2>/dev/null | head -1)"
-    size="$(wc -c < "$work/$name.lrat" | tr -d ' ')"
 
-    if [ "$ours" = "$theirs" ]; then
-        agree=yes
-    else
+    agree=yes
+    if [ "$ours" != "$theirs" ] || [ "$raw_ours" != "$raw_theirs" ]; then
         agree=NO
         status=1
     fi
-    printf '%-22s %6s  %-14s  %-14s  %s\n' "$name" "$size" "$theirs" "$ours" "$agree"
+    printf '%-22s %9s %9s  %-13s %-13s  %-13s %-13s  %s\n' \
+        "$name" \
+        "$(wc -c < "$work/$name.drat" | tr -d ' ')" \
+        "$(wc -c < "$work/$name.lrat" | tr -d ' ')" \
+        "${raw_theirs#s }" "${raw_ours#s }" "${theirs#s }" "${ours#s }" "$agree"
 done
 
 echo

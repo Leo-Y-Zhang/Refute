@@ -233,6 +233,24 @@ pub(crate) fn scan_lit(tok: &str, limits: &Limits) -> Result<crate::lit::Lit, Pa
     crate::lit::Lit::new(narrowed).ok_or(ParseErrorKind::NotAnInteger(tok.to_owned()))
 }
 
+/// Pushes onto a list that is bounded as it grows, never after it has grown.
+///
+/// Shared by both proof readers, because both take a list of untrusted length
+/// from an untrusted file and neither may allocate to meet it.
+pub(crate) fn push_bounded<T>(
+    target: &mut Vec<T>,
+    value: T,
+    limits: &Limits,
+) -> Result<(), ParseErrorKind> {
+    if target.len() >= limits.max_clause_len {
+        return Err(ParseErrorKind::ListTooLong {
+            limit: limits.max_clause_len,
+        });
+    }
+    target.push(value);
+    Ok(())
+}
+
 /// Scans a clause identifier: strictly positive, within `u64`.
 pub(crate) fn scan_id(tok: &str) -> Result<crate::lit::ClauseId, ParseErrorKind> {
     let raw = scan_i64(tok)?;

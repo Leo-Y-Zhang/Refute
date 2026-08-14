@@ -16,11 +16,15 @@ set -euo pipefail
 
 kissat="${KISSAT:-}"
 drat_trim="${DRAT_TRIM:-}"
+# The one fixture whose formula this repository does not build. See the note at
+# the bottom of the script.
+vdw_cnf="${VDW_CNF:-}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --kissat) kissat="$2"; shift 2 ;;
         --drat-trim) drat_trim="$2"; shift 2 ;;
+        --vdw) vdw_cnf="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -106,7 +110,49 @@ if [ "$(head -c 1 "$fixtures/b17_binary_proof.lrat")" != "a" ]; then
 fi
 echo "captured b17_binary_proof.lrat (64 bytes of binary DRAT)"
 
-python3 "$root/tools/mutate.py" --fixtures "$fixtures" --kissat "$kissat"
+# Milestone 2: the raw solver output, for the checker that reads it directly.
+#
+# Only four instances get one. The corpus has a 500 KB budget and random_unsat
+# alone is 79 KB in DRAT form, against 21 KB in LRAT: drat-trim's trimming is
+# most of what makes the committed corpus small. The four kept are the ones the
+# two-checker agreement test needs -- every name that has both a .lrat and a
+# .drat is checked twice, by two readers and two checkers, on committed bytes
+# and with no binary in CI.
+#
+# Normalised to LF here rather than by .gitattributes: kissat writes the
+# platform's line endings, and the CRLF fixture below is the one file whose
+# bytes are the point of it.
+for name in tiny_unsat deletes_originals real_rat_proof rat_pigeonhole; do
+    cnf="$fixtures/$name.cnf"
+    "$kissat" --no-binary -q "$cnf" "$work/$name.raw" && rc=$? || rc=$?
+    if [ "$rc" -ne 20 ]; then
+        echo "$name: kissat did not report UNSATISFIABLE (exit $rc)" >&2
+        exit 1
+    fi
+    tr -d '\r' < "$work/$name.raw" > "$fixtures/$name.drat"
+    # Forward, never the default. Backward checking only checks the lemmas it
+    # keeps, so it is not an oracle for a forward checker.
+    if ! "$drat_trim" "$cnf" "$fixtures/$name.drat" -f | grep -q '^s VERIFIED'; then
+        echo "$name: drat-trim -f did not verify the raw proof" >&2
+        exit 1
+    fi
+    echo "generated $name.drat"
+done
+
+# B29: the same solver output with its line endings left alone. Generated on
+# Windows, so it is CRLF throughout, which is what a reader on this platform
+# will hand the tool. It pairs with tiny_unsat.cnf; only the proof's bytes are
+# under test. The CI job greps this file for a carriage return, because a
+# checkout that translated it would leave the test passing and testing nothing.
+cp "$work/tiny_unsat.raw" "$fixtures/b30_crlf.drat"
+if ! grep -qU $'\r' "$fixtures/b30_crlf.drat"; then
+    echo "b30_crlf.drat: kissat wrote LF, so this fixture tests nothing" >&2
+    exit 1
+fi
+echo "captured b30_crlf.drat (CRLF, $(wc -c < "$fixtures/b30_crlf.drat") bytes)"
+
+python3 "$root/tools/mutate.py" --fixtures "$fixtures" --kissat "$kissat" \
+    --drat-trim "$drat_trim"
 
 # Independent check of the one formula edited by hand: the same lemma sequence
 # in DRAT form, verified by drat-trim against the edited formula. The lemmas are
@@ -142,4 +188,37 @@ fi
 echo "validated r11 lemma sequence against drat-trim"
 
 echo
-echo "corpus size: $(du -sk "$fixtures" | cut -f1) KB in $(ls "$fixtures" | wc -l) files"
+# Bytes, not blocks. `du` rounds every file up to a cluster, which on a corpus
+# of small fixtures reported 496 KB against the 500 KB budget while the content
+# was 280 KB -- a figure that would have failed the budget on the next fixture
+# added, for no reason a clone would ever see.
+echo "corpus size: $(find "$fixtures" -type f -printf '%s
+' | awk '{s+=$1} END {printf "%d KB", (s+1023)/1024}') in $(ls "$fixtures" | wc -l) files (500 KB budget)"
+
+# The van der Waerden certificate, whose formula is built by a generator in
+# another of the author's repositories rather than by tools/instances.py. The
+# committed bytes are checked by CI like every other fixture; regenerating them
+# needs that repository, so this step is skipped loudly rather than silently:
+#
+#   VDW_CNF=<dir>/A217058_n21_j1.cnf tools/gen_fixtures.sh
+#
+# built there by `python vdw/drat_certify.py --seq A217058 --rung 1 --keep <dir>`.
+# The proof itself is produced here, by the same kissat command as every other
+# fixture, so what is imported is a formula and never a proof.
+if [ -z "$vdw_cnf" ]; then
+    echo "skipping vdw_a217058_n21: pass --vdw <formula.cnf> or set VDW_CNF"
+else
+    cp "$vdw_cnf" "$fixtures/vdw_a217058_n21.cnf"
+    "$kissat" --no-binary -q "$fixtures/vdw_a217058_n21.cnf" \
+        "$fixtures/vdw_a217058_n21.drat" && rc=$? || rc=$?
+    if [ "$rc" -ne 20 ]; then
+        echo "vdw_a217058_n21: kissat did not report UNSATISFIABLE (exit $rc)" >&2
+        exit 1
+    fi
+    if ! "$drat_trim" "$fixtures/vdw_a217058_n21.cnf" \
+        "$fixtures/vdw_a217058_n21.drat" -f | grep -q '^s VERIFIED'; then
+        echo "vdw_a217058_n21: drat-trim did not verify its own proof" >&2
+        exit 1
+    fi
+    echo "generated vdw_a217058_n21.drat"
+fi

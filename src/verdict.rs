@@ -9,13 +9,40 @@
 //! saying so is the whole reason this project exists.
 //!
 //! [`Verdict::Verified`] has no `Default`, no `From<bool>` and no public
-//! constructor: `checker.rs` is the only file in the library that names it, and
-//! `tests/trust_boundary.rs` fails the build if that stops being true.
+//! constructor. Until milestone 2 the guard on that was "`checker.rs` is the
+//! only file that names it"; there are now two checkers with a legitimate
+//! claim to have derived the empty clause, and **two checkers must not mean
+//! two doors**. So the variant is constructed in exactly one place — [`verified`],
+//! below — and what moved to two places is the *evidence* it demands.
+//! `tests/trust_boundary.rs` counts both, and fails the build if either count
+//! changes.
 
 use core::fmt;
 
 use crate::lit::{ClauseId, Lit};
 use crate::parse::ParseError;
+
+/// Evidence that a checked step derived the empty clause.
+///
+/// Carries nothing. Its whole value is that it cannot be conjured: the field
+/// is `()` so there is no data to invent, and every construction of it is a
+/// literal `EmptyClauseDerived(())` that a grep over the library finds. A
+/// checker builds one immediately after the step that added the empty clause
+/// returned `Ok`, and hands it to [`verified`], which is the only function in
+/// this crate that produces [`Verdict::Verified`].
+///
+/// Deliberately not `Clone` and not `Copy`: a witness that could be duplicated
+/// could be kept from an earlier run and presented again.
+pub(crate) struct EmptyClauseDerived(pub(crate) ());
+
+/// The one function in the library that produces [`Verdict::Verified`].
+///
+/// Takes the witness by value and drops it. There is no other route to the
+/// variant, in either checker, at any milestone. `Verdict` is itself
+/// `#[must_use]`, so this function inherits it.
+pub(crate) fn verified(_: EmptyClauseDerived) -> Verdict {
+    Verdict::Verified
+}
 
 /// The outcome of checking one proof against one formula.
 ///
@@ -113,6 +140,25 @@ pub enum Reason {
     /// blocks. It is the one new rule with a plausible false-rejection risk
     /// against a different producer, which is why it has a code of its own.
     RatLemmaIsRup(ClauseId),
+    /// A live clause holding the negated pivot whose resolvent with the lemma
+    /// is not implied by unit propagation. The DRAT path's one new rejection.
+    ///
+    /// The candidate is named by [`Rejection::resolvent`], in the checker's own
+    /// numbering: originals are `1..n` in file order and lemmas continue from
+    /// `n + 1`, which is exactly the LRAT numbering a reader already knows.
+    ///
+    /// There is one of these and not four. Milestone 1b needed
+    /// [`Reason::MissingResolvent`], [`Reason::NotAResolutionCandidate`],
+    /// [`Reason::ResolventFalsifiedEarly`] and [`Reason::RatLemmaIsRup`] to
+    /// police a hint list that claimed to name the candidate set exactly. Here
+    /// there is no claim to police: the checker enumerates the candidates
+    /// itself, so the enumeration *is* the check, and the four strictness
+    /// rules that carry a false-rejection risk against another producer do not
+    /// exist on this path at all.
+    RatCheckFailed {
+        /// The pivot: the lemma's first literal, as written in the file.
+        pivot: Lit,
+    },
 }
 
 impl fmt::Display for Reason {
@@ -155,6 +201,10 @@ impl fmt::Display for Reason {
                 f,
                 "hint {id} conflicts before the resolvent blocks, so the lemma is RUP"
             ),
+            Self::RatCheckFailed { pivot } => write!(
+                f,
+                "the resolvent on pivot {pivot} is not implied by unit propagation"
+            ),
         }
     }
 }
@@ -183,8 +233,8 @@ impl fmt::Display for Unsupported {
         match self {
             Self::BinaryProof { line } => write!(
                 f,
-                "proof line {line}: this is a binary proof; refute reads text LRAT. \
-                 Re-run kissat with --no-binary, then drat-trim with -L"
+                "proof line {line}: this is a binary proof; refute reads text DRAT \
+                 and text LRAT. Re-run kissat with --no-binary"
             ),
         }
     }

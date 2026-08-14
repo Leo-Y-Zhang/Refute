@@ -37,8 +37,14 @@ language, agreeing on the same artefacts, converts a single point of trust into 
       everything, before the checking code existed. Recorded in the commit trail.
 - [ ] No input file — malformed, adversarial, or truncated — causes a panic,
       an unbounded allocation, or a hang.
-- [ ] (M2) 10,000 differential fuzz cases against `drat-trim` with zero
-      unexplained verdict disagreements.
+- [x] (M2) 10,000 differential fuzz cases against `drat-trim -f` with zero cases
+      where Refute verifies a proof `drat-trim` rejects. **Met 2026-08-14, seed
+      20260814: 10,000 cases (2,938 unsatisfiable, 7,062 satisfiable), 30,564
+      comparisons, 0 false accepts, 257 strict wins all on the documented list,
+      39.0 % of mutants still verified by both.** *Narrowed on 2026-08-14
+      from "zero unexplained disagreements": a forward checker is legitimately
+      stricter than a backward one, and 5 of 24 measured mutants are still valid
+      proofs. The milestone-2 section states the full rule.*
 - [ ] (M4) A reader can drop a `.cnf` and `.lrat` into a web page with no install
       and read a verdict.
 
@@ -146,7 +152,7 @@ milestone 1b lands.
 |---|---|---|
 | **1** | Forward LRAT checker (RUP + hints), CLI | 12 rejection controls pass; each observed failing first |
 | 1b | RAT hint blocks | The author's a(4)-rung certificate checks; `s UNSUPPORTED` becomes rare |
-| 2 | Differential fuzzing vs `drat-trim`; direct DRAT checking | 10k cases, zero unexplained disagreements |
+| 2 | Direct DRAT checking; differential fuzzing vs `drat-trim -f` | The a(4)-rung raw `.drat` verifies with `drat-trim` out of the chain; 10k fuzz cases, zero false accepts |
 | 3 | Native CLI for large proofs | The a(7)-rung proof (~200 MB LRAT) checks within memory budget |
 | 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser |
 | 5 | Benchmarks table in README | Like-for-like pipeline comparison, methodology stated |
@@ -328,3 +334,238 @@ milestone that makes the tool exist at all:
 - **Deleting the third verdict entirely.** It would have to come back for binary
   LRAT, DRAT and whatever milestone 5 wants, and the CLI contract — exit 2 —
   would move twice.
+
+---
+
+# Milestone 2 — direct DRAT, and differential fuzzing
+
+**Status:** draft · **Date:** 2026-08-14 · **TDD:** [TDD.md, part 3](TDD.md#part-3--milestone-2-direct-drat)
+
+## Problem
+
+Refute checks LRAT. LRAT is what `drat-trim` writes. So the pipeline a reader
+must run to use Refute today is
+
+```
+kissat --no-binary f.cnf f.drat
+drat-trim f.cnf f.drat -L f.lrat      <- drat-trim decides which lemmas exist,
+refute f.cnf f.lrat                      in which order, with which hints
+```
+
+and `drat-trim` is still in the chain. Not as the checker — that is the whole
+point of milestones 1 and 1b — but as the **producer** of the artefact Refute
+reads. Every hint Refute walks was chosen by `drat-trim`; every lemma it checks
+survived `drat-trim`'s trimming; the lemmas `drat-trim` discarded are never seen
+by Refute at all. Measured this session on the author's own a(4)-rung
+certificate: the raw proof has 31,195 additions and `drat-trim`'s core keeps
+23,281 of them. **A quarter of the solver's output is currently checked by
+nobody**, and a `drat-trim` that trimmed away a lemma it should have kept would
+produce an LRAT file that Refute verifies happily.
+
+The PRD's opening sentence — "a 1,500-line C program that is the sole thing
+standing between a solver bug and a false published theorem" — is therefore
+still true of the current pipeline, in a narrower way than before. Milestone 2
+is the milestone that makes it false:
+
+```
+kissat --no-binary f.cnf f.drat
+refute f.cnf f.drat
+```
+
+## Who it is for
+
+The same three people, and for the first of them this is the milestone the
+project was started for.
+
+1. **The author**, re-checking the DRAT certificates behind published OEIS
+   terms with `drat-trim` out of the loop entirely, rather than checking
+   `drat-trim`'s summary of them.
+2. **A reader of those results** who wants one command and one binary.
+3. **Anyone with an UNSAT proof** from any solver that emits DRAT, which is all
+   of them, without having to build a C program first.
+
+## Success looks like
+
+- [ ] `refute f.cnf f.drat` prints `s VERIFIED` and exits 0 on a proof written
+      by `kissat --no-binary`, with no `drat-trim` step anywhere in the command
+      line and no `drat-trim`-produced file on disk.
+- [ ] **The acceptance artefact:** the author's A217058 a(4) rung — n=33, j=4,
+      symmetry breaking off, 1,249 original clauses, a 2.5 MB raw `.drat` with
+      31,195 additions and 26,988 deletions — verifies from the raw proof.
+      `drat-trim -f` verifies the same two files in 0.589 s, measured, which is
+      the yardstick the run is reported against.
+- [ ] The A217058 n=21 and n=25 rungs verify from their raw `.drat` files as
+      well, and are small enough to be in the corpus if the owner wants them.
+- [ ] The format of a proof is decided by reading it, never by its extension,
+      and **an LRAT file is never checked as DRAT nor a DRAT file as LRAT**.
+      Measured on the committed corpus: 0 of 49 LRAT proofs are accepted by the
+      DRAT grammar, and 0 of 9 DRAT proofs by the LRAT grammar.
+- [ ] Every milestone-1 and milestone-1b test still passes, unchanged. The LRAT
+      checker is not touched by this milestone.
+- [x] A differential fuzz harness runs 10,000 generated instances end to end and
+      reports **zero cases where Refute prints `s VERIFIED` on a proof
+      `drat-trim -f` rejects**. Run 2026-08-14 at seed 20260814: 30,564
+      comparisons, **0 false accepts**. The 39.0 % harmless-mutant rate matches
+      the 39.3 % measured at 2,000 cases, so the generator's mix did not drift
+      as the run got longer. That is the only unconditional invariant; see
+      "Explicitly out of scope" for why "every mutant is rejected" is not one.
+- [ ] Every new rejection rule has a test, and every one of those tests has been
+      **observed failing**: either written before the rule, or — where that is
+      impossible — the rule's line reverted in the source and the specific test
+      watched to die, with the output in the commit message.
+- [ ] No input file causes a panic, an unbounded allocation or a hang. The DRAT
+      reader inherits milestone 1b's line and list ceilings.
+
+## Requirements
+
+**Must**
+
+- A text DRAT reader: `<lits> 0` additions, `d <lits> 0` deletions, the bare `0`
+  empty clause, streaming, one step per line, milestone 1b's ceilings applied.
+- Unit propagation to a fixpoint over the live clause database, with watched
+  literals, and a trail unwound in proportion to what was assigned.
+- RUP checking of every addition: assume the negation of the lemma, propagate,
+  require a conflict.
+- RAT checking of every addition that is not RUP, on the pivot, where **the
+  pivot is the lemma's first literal as written in the file**. Every live clause
+  holding the negated pivot is a candidate, the candidate set is enumerated by
+  the checker from its own database, and the resolvent of every one of them must
+  be RUP. Fail closed: a lemma with no literals has no pivot, so the empty
+  clause is accepted only when it is RUP.
+- Deletion by literals rather than by identifier, removing **exactly one** copy
+  when the same clause is live more than once. Measured: duplicates occur —
+  39 of the a(4) rung's additions duplicate a live clause, and the largest
+  multiplicity seen is 3.
+- Format detection that reads the file, is exact rather than heuristic, and
+  never guesses: binary first, then the one grammar that accepts the first step,
+  and when neither accepts it, the incumbent LRAT reader reports its own parse
+  error exactly as it does today.
+- The three-way verdict unchanged, with `VERIFIED` still constructed at one site
+  in the library, now via a witness type so that two checkers cannot become two
+  doors.
+- No new dependency. MSRV stays 1.74.0 and CI keeps testing on it.
+
+**Should**
+
+- Explicit `--drat` / `--lrat` flags, so a user who knows can say so and
+  detection is skipped entirely.
+- `--stats` counters for the DRAT side: propagations, watch visits, RAT
+  additions, candidates examined. The occurrence-index bet is observable on the
+  reader's own proof for the same reason milestone 1b's scan bet is.
+- A differential fuzz harness, `tools/fuzz.py`, generating small random
+  instances, solving them, mutating the proofs in six named classes, and
+  comparing every verdict with `drat-trim -f`.
+
+**Won't (this time)**
+
+- Backward checking, trimming, core extraction, LRAT emission, binary DRAT
+  reading, parallelism. Unchanged from milestones 1 and 1b.
+- Rewriting the LRAT checker to share the DRAT checker's clause store. Two
+  stores, two propagation strategies, one verdict type — see the TDD.
+- Deriving the pivot rather than taking the first literal. Unchanged from 1b,
+  and now measured in DRAT as well: 348 of 348 non-RUP additions across six real
+  proofs are RAT on the lemma's first literal.
+- The 200 MB rung. The largest artefact this milestone checks is 2.5 MB.
+  Milestone 3 still owns scale.
+
+## Explicitly out of scope
+
+- **Asserting that every mutated proof is rejected.** It was in the brief for
+  this milestone and it is false, and a harness that asserted it would be red on
+  correct behaviour until someone weakened it. Measured: of 24 single-literal
+  mutations of two real proofs, **5 are still valid proofs** and `drat-trim -f`
+  verifies them — the flipped literal landed in a lemma nothing later depends
+  on. The harness therefore asserts *agreement with `drat-trim -f`*, plus
+  unconditional rejection for the two classes where rejection is a theorem
+  rather than an observation (no empty clause; truncated before it).
+- **Using `drat-trim`'s default backward mode as the oracle.** Also measured:
+  1 of those 24 mutants is `s VERIFIED` backward and `s NOT VERIFIED` forward,
+  because backward mode never checks a lemma it has trimmed away. Comparing a
+  forward checker against a backward one manufactures disagreements that are
+  nobody's bug. The oracle is `drat-trim -f`.
+- **Being faster than `drat-trim`.** Unchanged, but the honest comparison
+  finally exists: after this milestone both programs read the same `.drat` and
+  answer the same question, so milestone 5 can publish a like-for-like row. It
+  is a fair comparison, not a favourable one — `drat-trim -f` checks the a(4)
+  rung in 0.589 s and is a mature C program.
+- **Matching `drat-trim` bug for bug.** Refute honours deletion of unit clauses
+  where `drat-trim` ignores it, and refuses comment lines in a proof where
+  `drat-trim` tolerates junk. Both are stricter, both are measured at zero
+  occurrences in real files, and both are named in the README.
+- **Producing proofs.** Unchanged and permanent.
+
+## Safety and privacy
+
+- **Personal data:** none, unchanged.
+- **The serious defect is unchanged, and this milestone adds the largest new
+  route to it yet.** Milestone 1b's checker could only be wrong about a step the
+  producer had already justified with hints; this one recomputes everything from
+  the formula, so a bug in propagation, in the candidate enumeration, or in
+  deletion matching is a false `VERIFIED` with no second opinion in the chain to
+  contradict it. Three specific holes, each designed against and each with its
+  own control: propagation that assigns a literal nothing implies; a candidate
+  set that misses a live clause holding the negated pivot; a deletion that
+  removes more copies of a clause than the proof asked for.
+- **The trail leak is the one that has already happened once.** Milestone 1b
+  shipped with `unwind(base)` between resolvent blocks untested, and deleting it
+  left 77 tests green while the checker printed `s VERIFIED` on a satisfiable
+  formula. The DRAT step has the same shape and therefore the same hole, and it
+  gets its fixture before the code.
+- **Revocation** still has no meaning: no accounts, no sessions, no server, no
+  stored state, nothing uploaded.
+- **Worst outcome if wrong:** the author cites Refute as independent
+  corroboration of an upper bound that is false — and after this milestone that
+  citation would be the *only* check in the chain for the lemmas `drat-trim`
+  trims away. The mitigation is the ordering rule the TDD's rollback section
+  keeps from 1b: no README claim about DRAT is written until the differential
+  harness and the fuzz run have both agreed with `drat-trim -f`.
+
+## Open questions
+
+1. **Does a real vdW certificate belong in the committed corpus — now in DRAT
+   form?** Milestone 1b left this open and did not commit one. The raw `.drat`
+   for A217058 n=21 is 20 KB, and its formula 7 KB: 27 KB against a 500 KB
+   budget that stands at 372 KB today. It would put a real certificate of a
+   published term under CI on every commit, with `drat-trim` out of the chain,
+   which is the whole point of the project — and it would couple two of the
+   author's repositories' artefacts. **Needed before the fixtures are
+   generated.** The a(4) rung is not a candidate either way: 2.5 MB is five
+   times the whole corpus budget, and it stays in the differential harness.
+2. **Does `refute` grow a `check` subcommand?** The brief for this milestone
+   writes the command as `refute check <cnf> <drat>`. The shipped contract is
+   two positional arguments, documented in the README and asserted by twelve CLI
+   tests. The TDD specifies accepting an optional leading `check` verb so that
+   both spellings work and nothing breaks; the alternative — a real subcommand
+   tree, with `refute a.cnf b.lrat` becoming a usage error — is a breaking
+   change to a published contract and is not proposed. *Not a blocker: the
+   compatible form is specified and can be deleted in one commit if the owner
+   wants the strict tree instead.*
+
+## Not doing / rejected alternatives
+
+- **Reusing the LRAT checker's clause database.** It is a `HashMap<ClauseId,
+  Clause>` with no watches and no occurrence lists, exactly right for walking a
+  hint list and exactly wrong for propagation. Retrofitting it would rewrite
+  reviewed, measured, green code for the benefit of the milestone that has not
+  been written yet. Two stores; the shared thing is the verdict.
+- **A persistent root-level trail**, so that units are not re-propagated on
+  every step. It is what `drat-trim` does, and it is why `drat-trim` ignores
+  deletions of unit clauses — a root trail is only sound while nothing retracts
+  the assignments in it, so it needs reason tracking and backtracking on
+  deletion. Measured instead: the a(4) rung's proof contains **87 unit lemmas**
+  and its formula one unit clause, so propagating from scratch each step
+  re-does at most 88 assignments. The complexity buys nothing at this scale, and
+  the unsound shortcut — keeping the trail without reason tracking — is exactly
+  the kind of thing this project exists to not do.
+- **An in-process fuzzer (`cargo-fuzz`, `proptest`, `arbitrary`).** The
+  interesting oracle is an external C program, so the harness has to drive
+  processes whatever language it is written in; a Rust dev-dependency would add
+  audit surface and buy nothing. `tools/fuzz.py` is Python 3 with the standard
+  library, beside `tools/instances.py` and `tools/mutate.py`, which is where the
+  repository already keeps things that run a solver.
+- **Checking DRAT by translating it to LRAT internally.** That is writing
+  `drat-trim` again, in Rust, and then trusting it. The point is a second
+  implementation, not a second copy.
+- **Accepting a lemma because it is RAT on *some* literal.** Sound, and a
+  search where the format promises an answer. Measured at 348 of 348 in DRAT,
+  as it was in LRAT: the first literal is always the pivot.

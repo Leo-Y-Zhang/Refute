@@ -9,11 +9,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::io::BufRead;
 
 use crate::cnf::{parse_dimacs, Cnf, Warning};
+use crate::drat::DratReader;
+use crate::format::Format;
 use crate::limits::Limits;
 use crate::lit::{Clause, ClauseId, Lit};
 use crate::lrat::{Hints, LratReader, ResolventBlock, Step};
 use crate::parse::ParseErrorKind;
-use crate::verdict::{Reason, Rejection, Unsupported, Verdict};
+use crate::verdict::{EmptyClauseDerived, Reason, Rejection, Unsupported, Verdict};
 
 /// Unassigned.
 const UNSET: u8 = 0;
@@ -85,6 +87,39 @@ pub struct Stats {
     /// `p cnf 4294967295 1` is nineteen bytes, and taking its word for it buys
     /// a 64 MB allocation, capped only by `Limits::max_var`.
     pub assignment_slots: usize,
+    /// Literals assigned by unit propagation. DRAT only.
+    ///
+    /// Zero on the LRAT path, where the producer's hints name every
+    /// propagation and there is no engine to count.
+    pub propagations: u64,
+    /// Clauses inspected in watch lists. DRAT only.
+    pub watch_visits: u64,
+    /// Occurrence-index slots written or cleared. DRAT only.
+    ///
+    /// The one performance bet in milestone 2, made countable. Part 2 measured
+    /// the same choice and took the scan; part 3 measured it again on raw
+    /// proofs and took the index, because `drat-trim`'s LRAT deletes far
+    /// harder than the file the solver wrote — 159 live clauses on average
+    /// against 666 for the same instance. The trigger for going back is
+    /// written down: if this ever exceeds RAT additions times mean live
+    /// clauses on a real proof, return to the scan.
+    pub occurrence_updates: u64,
+    /// Additions accepted because unit propagation reached a conflict. DRAT
+    /// only; on the LRAT path the hint walk is the same thing under a name the
+    /// file chose.
+    pub rup_additions: u64,
+    /// Additions accepted because the lemma holds a literal and its negation.
+    ///
+    /// The one permissive rule on an addition, on both paths: adding `x or
+    /// not-x` preserves satisfiability and it can never be the empty clause.
+    /// Counted so that `rup + rat + tautological == additions` is an identity
+    /// a test can assert rather than a sentence in a document.
+    pub tautological_additions: u64,
+    /// Resolution candidates examined by the RAT check. DRAT only.
+    ///
+    /// Every live clause holding the negated pivot, every time — the loop has
+    /// no early exit, because RAT is a claim about all of them.
+    pub rat_candidates_checked: u64,
 }
 
 /// Everything one run produces.
@@ -96,6 +131,14 @@ pub struct Outcome {
     pub warnings: Vec<Warning>,
     /// Counters.
     pub stats: Stats,
+    /// Which reader read the proof.
+    ///
+    /// Reported rather than printed. The verdict line is identical whichever
+    /// checker ran, and a reader who cannot tell them apart from it is reading
+    /// the contract correctly; this is here for `--stats`, which prints the
+    /// DRAT counter line only when the DRAT checker ran, so that the block is
+    /// never a wall of zeroes.
+    pub format: Format,
 }
 
 /// Checks `proof` against `cnf`.
@@ -112,7 +155,56 @@ pub fn check<R: BufRead>(cnf: &Cnf, proof: LratReader<R>, limits: &Limits) -> Ve
 /// here rather than in `main`, so that it is covered by the test suite and so
 /// that the milestone-4 WASM entry point cannot accidentally differ from the
 /// CLI. Warnings are returned for the caller to print; the library never does.
-pub fn check_readers<F: BufRead, P: BufRead>(formula: F, proof: P, limits: &Limits) -> Outcome {
+pub fn check_readers<F: BufRead, P: BufRead>(formula: F, mut proof: P, limits: &Limits) -> Outcome {
+    // The first kilobyte, and no more. A peek is not a read: `fill_buf` leaves
+    // every byte where it was, so the reader handed on below still starts at
+    // the beginning of the file. A reader that returns nothing here — because
+    // it is empty, or because it failed — is classified as LRAT, which is the
+    // default arm, and the failure is reported by the reader with a line
+    // number rather than swallowed here without one.
+    let head: Vec<u8> = match proof.fill_buf() {
+        Ok(buffered) => buffered
+            .get(..crate::format::PEEK_BYTES)
+            .unwrap_or(buffered)
+            .to_vec(),
+        Err(_) => Vec::new(),
+    };
+    let format = crate::format::detect(&head, limits);
+    check_readers_with_format(formula, proof, limits, format)
+}
+
+/// [`check_readers`], with the format supplied rather than detected.
+///
+/// What `--drat` and `--lrat` call. Nothing in this library dispatches on a
+/// path: an extension is a claim by whoever named the file, and a claim is not
+/// evidence.
+///
+/// Forcing the wrong format is a rejection, never a wrong acceptance. Each
+/// checker is sound for its own grammar, so a file the DRAT checker verifies
+/// refutes the formula when read as DRAT, whatever its author meant it to be.
+pub fn check_readers_with_format<F: BufRead, P: BufRead>(
+    formula: F,
+    proof: P,
+    limits: &Limits,
+    format: Format,
+) -> Outcome {
+    // A variable costs about a byte in the LRAT store and about ninety-six in
+    // the DRAT one, so that path parses both files against the tighter
+    // ceiling. It has to be the parser: the store grows to whatever variable
+    // turns up, so clamping the store's initial size bounds nothing, and a
+    // formula naming a huge variable is as cheap to write as a proof line
+    // naming one.
+    let tightened;
+    let limits = match format {
+        Format::Drat => {
+            tightened = Limits {
+                max_var: limits.max_var.min(limits.max_drat_var),
+                ..*limits
+            };
+            &tightened
+        }
+        Format::Lrat => limits,
+    };
     let cnf = match parse_dimacs(formula, limits) {
         Ok(cnf) => cnf,
         Err(err) => {
@@ -125,15 +217,22 @@ pub fn check_readers<F: BufRead, P: BufRead>(formula: F, proof: P, limits: &Limi
                 }),
                 warnings: Vec::new(),
                 stats: Stats::default(),
+                format,
             }
         }
     };
     let warnings = cnf.warnings.clone();
-    let (verdict, stats) = check_with_stats(&cnf, LratReader::new(proof, limits), limits);
+    let (verdict, stats) = match format {
+        Format::Lrat => check_with_stats(&cnf, LratReader::new(proof, limits), limits),
+        Format::Drat => {
+            crate::drat::checker::check_with_stats(&cnf, DratReader::new(proof, limits), limits)
+        }
+    };
     Outcome {
         verdict,
         warnings,
         stats,
+        format,
     }
 }
 
@@ -368,13 +467,15 @@ impl Checker {
         None
     }
 
-    /// The only place in this crate that produces a verdict of `Verified`.
+    /// Builds the witness that this checker derived the empty clause.
     ///
     /// Called from exactly one site, immediately after the step that added the
-    /// empty clause returned `Ok`. `tests/trust_boundary.rs` fails if a second
-    /// site ever appears.
+    /// empty clause returned `Ok`. The witness is the only argument
+    /// [`crate::verdict::verified`] takes, and that function is the only route
+    /// to `Verdict::Verified` in the library.
+    /// `tests/trust_boundary.rs` fails if either count changes.
     fn finish_with_empty_clause(&self) -> Verdict {
-        Verdict::Verified
+        crate::verdict::verified(EmptyClauseDerived(()))
     }
 
     /// Puts the negation of a lemma on the trail.
