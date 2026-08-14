@@ -1,21 +1,32 @@
 # Session handoff
 
-**State:** milestone 1 is on `main` (4b6bb9e). Milestone 1b is **designed on
-`design/milestone-1b` (d7532c6) and built on `feat/milestone-1b`**, which
-branches from it. The suite is 79 tests, green on stable 1.97.1 and on 1.74.0;
-`clippy --all-targets -D warnings` and `cargo fmt --check` are clean. The
-branch is pushed. Nothing is merged, and `main` has not been touched.
+**State:** milestones 1 and 1b are both on `main` (`d9961cb`, pushed, CI green
+on all five jobs, 79 tests). Milestone 2 — direct DRAT checking and differential
+fuzzing — is **designed on `design/milestone-2`** and not built. Nothing else is
+in flight.
+
+*The paragraph that used to stand here said milestone 1b was unmerged and that
+`main` was at 4b6bb9e. `git merge-base --is-ancestor feat/milestone-1b main`
+says otherwise, so the document was corrected rather than the memory of it kept.*
 
 ## Exact next step
 
-**The owner's decision: merge `feat/milestone-1b` into `main`, or send it
-back.** Everything below it is done — the release blockers are closed, CI has
-run on the real code, and the two questions that were open are still open and
-still not blockers.
+**Answer milestone 2's open question 1 — does a real van der Waerden
+certificate go into the committed corpus, now in DRAT form? — and then build
+step 2 of `docs/TDD.md` part 3:** teach `tools/gen_fixtures.sh` to emit
+`<name>.drat` beside the existing pairs, and `tools/mutate.py` to derive the ten
+`d` fixtures. Fixtures before tests, for part 1's reason.
 
-Answer them at merge time, not before:
+The design is `docs/PRD.md` "Milestone 2" and `docs/TDD.md` part 3, with the App
+Flow delta in part 1c. Everything in them was measured on 2026-08-14 against
+nine real proofs, including the author's a(4)-rung certificate; the numbers are
+in the part-3 measurement table and should be reproduced, not re-derived, when
+the build starts.
 
-## The two questions
+## The two questions milestone 1b left open
+
+They were not answered at merge time and are still open. Neither blocks
+milestone 2.
 
 1. **Does a real van der Waerden certificate belong in the committed corpus?**
    TDD part 2, open question 1. `vdw_rung` would be about 49 KB of CNF and LRAT

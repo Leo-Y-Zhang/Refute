@@ -104,6 +104,79 @@ for.
 
 ---
 
+## Part 1c — what milestone 2 changes in the CLI (2026-08-14)
+
+One new decision happens before anything is checked — which format the proof is
+— and it is deliberately invisible when it goes right.
+
+### Entry points
+
+- `refute <formula.cnf> <proof>` — unchanged, and now accepts either format.
+  The proof is classified by reading it, never by its extension.
+- `refute check <formula.cnf> <proof>` — the same thing. Accepted only when
+  there are exactly three positional arguments and the first is `check`.
+- `refute --drat ...` / `refute --lrat ...` — skip detection entirely.
+- `refute --help`, `refute --version` — unchanged, whole-command-line only.
+
+### The happy path, and the one new step in it
+
+1. Two paths given. Both open.
+2. **The first kilobyte of the proof is peeked. Binary means stop; otherwise
+   exactly one of the two grammars accepts the first step, and that is the
+   reader.** Nothing is printed.
+3. CNF parses. Nothing printed unless a warning applies.
+4. Proof streams. Each step checked. Nothing printed.
+5. A step derives the empty clause and it checks. Print `s VERIFIED`. Exit 0.
+
+### States that change or arrive
+
+| State | Stdout | Stderr | Exit | Notes |
+|---|---|---|---|---|
+| Verified, DRAT | `s VERIFIED` | — | 0 | Identical to the LRAT row. A reader who cannot tell which checker ran, from the verdict line, is reading the contract correctly |
+| Not verified, RAT step | `s NOT VERIFIED` | `refute: step 331, proof line 197, resolvent block 46: the resolvent with clause 46 on pivot 21 is not implied by unit propagation` | 1 | The candidate is named in the checker's own numbering — originals `1..n` in file order, lemmas from `n+1` — which is the LRAT numbering a reader already knows |
+| Neither grammar accepts the proof | `s NOT VERIFIED` | the LRAT reader's own parse error, unchanged from milestone 1 | 1 | Deliberate: a file nobody can read gets the incumbent's message rather than a new one saying only "unrecognised" |
+| Wrong format forced | `s NOT VERIFIED` | a parse error from the reader that was asked for | 1 | `--drat` on an LRAT file is a rejection, not a usage error: the user made a claim about the file and the file contradicted it |
+| Unsupported | `s UNSUPPORTED` | `refute: proof line 1: this is a binary proof; refute reads text DRAT and text LRAT. Re-run kissat with --no-binary` | 2 | The message loses its "then drat-trim with -L", because that step is no longer required |
+| `--stats`, DRAT run | — | a third line: propagations, watch visits, RAT additions, candidates checked, occurrence updates | — | Printed only when the DRAT checker ran, so the counter block is never a wall of zeroes |
+
+### Transitions
+
+```mermaid
+stateDiagram-v2
+    [*] --> ParseArgs
+    ParseArgs --> Usage: bad args
+    ParseArgs --> OpenFiles
+    OpenFiles --> IoError: missing / unreadable
+    OpenFiles --> Detect
+    Detect --> Unsupported: binary proof
+    Detect --> ParseCnf: DRAT, LRAT, or the LRAT default
+    ParseCnf --> NotVerified: malformed / limit
+    ParseCnf --> Streaming
+    Streaming --> NotVerified: step fails
+    Streaming --> NotVerified: EOF, no empty clause
+    Streaming --> Verified: empty clause checked
+    Usage --> [*]
+    IoError --> [*]
+    NotVerified --> [*]
+    Unsupported --> [*]
+    Verified --> [*]
+```
+
+`Detect` is the only new state, it has no output of its own, and it cannot reach
+`Verified` — every route to a verdict still goes through a checker.
+
+### Dead ends
+
+Still none, and one is now shallower. A user who hands over the wrong file used
+to get a parse error about a token; they now get a verdict from the reader that
+matches what the file actually is, so the common mistake — checking the `.drat`
+against the LRAT reader — stops being a mistake at all.
+
+The `UNSUPPORTED` message keeps naming the command that fixes it. It is now a
+shorter command, which is the point of the milestone.
+
+---
+
 ## Part 2 — Playground (milestone 4, designed not built)
 
 A static GitHub Pages page. WASM module, no server, no upload, no analytics, no
