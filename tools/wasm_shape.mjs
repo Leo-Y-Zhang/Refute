@@ -28,6 +28,15 @@
 //
 // Exits 0 and prints the shape, or exits 1 and says which property failed.
 
+// Paths in this file are relative to the repository root, so the process moves
+// there first. Running `node tools/<this>.mjs` from a home directory is the
+// obvious thing to try and used to fail with a module-not-found error that
+// named a path nobody had typed.
+import { chdir } from 'node:process';
+import { dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
+chdir(resolvePath(dirname(fileURLToPath(import.meta.url)), '..'));
+
 import { readFileSync, statSync } from 'node:fs';
 
 const DEFAULT_MODULE =

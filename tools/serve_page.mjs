@@ -23,6 +23,15 @@
 // there is no way to open this page without a server, and because a browser
 // check ought to be something anyone can run.
 
+// Paths in this file are relative to the repository root, so the process moves
+// there first. Running `node tools/<this>.mjs` from a home directory is the
+// obvious thing to try and used to fail with a module-not-found error that
+// named a path nobody had typed.
+import { chdir } from 'node:process';
+import { dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
+chdir(resolvePath(dirname(fileURLToPath(import.meta.url)), '..'));
+
 import { existsSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 
