@@ -438,9 +438,141 @@ function boundary() {
   return results;
 }
 
+// ---------------------------------------------------------------------------
+// W4, W6 and W8: the glue contract, and the instance rule it rests on.
+//
+// These are assertions about the module and the way it must be called, not
+// comparisons against the native checker, because the native checker has no
+// linear memory to detach and no instance to reuse.
+
+/** A fresh instance, which is the only kind this module supports. */
+function instantiate() {
+  return new WebAssembly.Instance(new WebAssembly.Module(moduleBytes), {})
+    .exports;
+}
+
+/** Loads a pair into an instance, in the documented order, and checks it. */
+function checkOn(exports, cnf, proof) {
+  const cnfOffset = exports.cnf_reserve(cnf.length);
+  const proofOffset = exports.proof_reserve(proof.length);
+  new Uint8Array(exports.memory.buffer, cnfOffset, cnf.length).set(cnf);
+  new Uint8Array(exports.memory.buffer, proofOffset, proof.length).set(proof);
+  return exports.check();
+}
+
+const encoder = new TextEncoder();
+const TINY_CNF = encoder.encode('p cnf 1 2\n1 0\n-1 0\n');
+const TINY_PROOF = encoder.encode('3 0 1 2 0\n');
+
+function glue() {
+  const results = [];
+
+  // W4. A view taken before a call that grows linear memory is detached by it,
+  // and the failure is a TypeError on a line that looks correct. This is the
+  // single most likely defect in any glue anyone writes against this module, so
+  // it is exercised rather than described.
+  const growing = instantiate();
+  const early = growing.cnf_reserve(TINY_CNF.length);
+  const staleView = new Uint8Array(
+    growing.memory.buffer,
+    early,
+    TINY_CNF.length,
+  );
+  growing.proof_reserve(4 * 1024 * 1024);
+  let detached = false;
+  try {
+    staleView.set(TINY_CNF);
+  } catch {
+    detached = true;
+  }
+  if (!detached && staleView.byteLength !== 0) {
+    failures.push(
+      'a Uint8Array taken before a growing reserve was still usable after it. ' +
+        'Either this engine no longer detaches on grow, in which case the glue ' +
+        'contract needs re-measuring, or this check is no longer growing memory.',
+    );
+  }
+  // And the documented order works, on the same instance, after that.
+  const afterGrow = checkOn(growing, TINY_CNF, TINY_PROOF);
+  if (afterGrow !== 0) {
+    failures.push(
+      `after a grow, the documented order gave ${afterGrow} rather than a ` +
+        'verdict of VERIFIED on a proof the CLI verifies',
+    );
+  }
+  results.push(
+    `W4 view taken before a growing reserve: detached; ` +
+      `pointer-first order after it: VERIFIED`,
+  );
+
+  // W6. Two empty files. The CLI says NOT VERIFIED, because nothing derived the
+  // empty clause, and the module must say exactly the same rather than treating
+  // "nothing to check" as a pass.
+  const empty = new Uint8Array(0);
+  const emptyCode = checkOn(instantiate(), empty, empty);
+  if (emptyCode !== 1) {
+    failures.push(
+      `a zero-length formula and a zero-length proof gave ${emptyCode}; the ` +
+        'CLI says NOT VERIFIED, and an empty proof that passed would be the ' +
+        'worst possible default',
+    );
+  }
+  results.push(`W6 two empty files: ${VERDICTS[emptyCode] ?? emptyCode}`);
+
+  // W8. One instance per check is a memory rule, not hygiene. `memory.grow` has
+  // no inverse, so a shared instance charges every later check for the largest
+  // earlier one, for as long as it lives.
+  const heavyCnf = readFileSync(join(FIXTURES, 'rat_pigeonhole.cnf'));
+  const heavyProof = readFileSync(join(FIXTURES, 'rat_pigeonhole.lrat'));
+
+  const shared = instantiate();
+  checkOn(shared, heavyCnf, heavyProof);
+  // Then a large one, which is the case the rule is really about: a user drops
+  // a 16 MB proof and then a small one. Sixteen megabytes of zero bytes is a
+  // proof the checker reports UNSUPPORTED on — it is not a valid file and does
+  // not need to be, because what is being measured is what holding it costs.
+  checkOn(shared, TINY_CNF, new Uint8Array(16 * 1024 * 1024));
+  const afterHeavy = shared.memory.buffer.byteLength;
+  checkOn(shared, TINY_CNF, TINY_PROOF);
+  const afterTinyOnShared = shared.memory.buffer.byteLength;
+
+  const ownInstance = instantiate();
+  checkOn(ownInstance, TINY_CNF, TINY_PROOF);
+  const onItsOwn = ownInstance.memory.buffer.byteLength;
+
+  if (afterTinyOnShared !== afterHeavy) {
+    failures.push(
+      'linear memory changed after a smaller check on the same instance, ' +
+        `${afterHeavy} then ${afterTinyOnShared}. The peak is supposed to be a ` +
+        'high-water mark; if it is not, the one-instance-per-check rule is ' +
+        'resting on something that is no longer true.',
+    );
+  }
+  if (!(onItsOwn < afterTinyOnShared)) {
+    failures.push(
+      `the same tiny check cost ${onItsOwn} on a fresh instance and ` +
+        `${afterTinyOnShared} on a reused one; the fresh one must be cheaper, ` +
+        'or there is nothing for the instance rule to buy',
+    );
+  }
+  const mb = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  results.push(
+    `W8 reused instance: ${mb(afterHeavy)} after a 16 MB check, still ` +
+      `${mb(afterTinyOnShared)} after a tiny check; a fresh instance for the ` +
+      `same tiny check: ${mb(onItsOwn)}`,
+  );
+
+  return results;
+}
+
 console.log('');
 console.log(`ceiling         ${MAX_INPUT_BYTES} bytes per input (page and module agree)`);
 for (const line of boundary()) {
+  console.log(`  ${line}`);
+}
+console.log('');
+console.log('glue contract');
+for (const line of glue()) {
   console.log(`  ${line}`);
 }
 

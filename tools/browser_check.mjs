@@ -36,13 +36,18 @@ const BROWSERS = [
   '/usr/bin/chromium-browser',
 ];
 
-/** What each example must report, and it is the CLI that decides these. */
+/**
+ * What each example must report, and it is the CLI that decides these.
+ *
+ * The third column is W7: an `UNSUPPORTED` verdict has to tell the reader what
+ * to do about it, or it is a dead end wearing a verdict's clothes.
+ */
 const EXPECTED = [
   ['tiny', 'VERIFIED'],
   ['vdw-n21', 'VERIFIED'],
   ['pigeonhole', 'VERIFIED'],
   ['corrupted', 'NOT VERIFIED'],
-  ['binary', 'UNSUPPORTED'],
+  ['binary', 'UNSUPPORTED', '--no-binary'],
 ];
 
 let browserPath = BROWSERS.find((p) => existsSync(p));
@@ -68,6 +73,27 @@ if (browserPath === undefined) {
 
 const origin = `http://127.0.0.1:${port}`;
 const failures = [];
+
+// Nothing in this script may wait forever.
+//
+// The first version could, in three places, and it burned ten minutes of a
+// local run and most of a CI job before anyone found out. A harness that hangs
+// tells you less than one that fails: a failure names the step it died on.
+const WATCHDOG_MS = Number(process.env.REFUTE_BROWSER_TIMEOUT_MS ?? 300000);
+const watchdog = setTimeout(() => {
+  console.error(
+    `
+FAIL  the browser check did not finish within ${WATCHDOG_MS} ms. ` +
+      `Last step reached: ${stage}.`,
+  );
+  process.exit(1);
+}, WATCHDOG_MS);
+watchdog.unref?.();
+
+/** What the script is waiting on, for the watchdog to name. */
+let stage = 'startup';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------
 // A very small DevTools protocol client
@@ -96,10 +122,16 @@ class Devtools {
 
   static async open(url) {
     const socket = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener('open', resolve, { once: true });
-      socket.addEventListener('error', reject, { once: true });
-    });
+    const opened = await Promise.race([
+      new Promise((resolve) => {
+        socket.addEventListener('open', () => resolve(true), { once: true });
+        socket.addEventListener('error', () => resolve(false), { once: true });
+      }),
+      sleep(20000).then(() => false),
+    ]);
+    if (!opened) {
+      throw new Error(`could not open a DevTools connection to ${url}`);
+    }
     return new Devtools(socket);
   }
 
@@ -140,8 +172,6 @@ class Devtools {
   }
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 async function until(predicate, { timeoutMs = 60000, everyMs = 100 } = {}) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -165,7 +195,15 @@ const server = spawn(
   ['tools/serve_page.mjs', '--port', String(port)],
   { stdio: ['ignore', 'pipe', 'inherit'] },
 );
-await new Promise((resolve) => server.stdout.once('data', resolve));
+stage = 'starting the static server';
+const serverReady = await Promise.race([
+  new Promise((resolve) => server.stdout.once('data', () => resolve(true))),
+  sleep(20000).then(() => false),
+]);
+if (!serverReady) {
+  console.error(`the static server never came up on port ${port}`);
+  process.exit(1);
+}
 
 const browser = spawn(
   browserPath,
@@ -181,6 +219,10 @@ const browser = spawn(
     // No first-party requests to anywhere but our own server, so that a
     // request to another origin is the page's doing and nothing else's.
     '--disable-sync',
+    // Chrome's own sandbox cannot start in most CI containers, and a browser
+    // that will not start is a check that never runs. Only where CI says so,
+    // and never on a developer's machine.
+    ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
     `--user-data-dir=${profile}`,
     'about:blank',
   ],
@@ -202,6 +244,7 @@ function shutdown() {
 process.on('exit', shutdown);
 
 // The debugging port takes a moment to answer.
+stage = 'waiting for the browser debugging port';
 const targets = await until(async () => {
   try {
     const reply = await fetch('http://127.0.0.1:9333/json/list');
@@ -297,7 +340,8 @@ console.log(
     `${'peak'.padEnd(9)} time`,
 );
 
-for (const [id, expected] of EXPECTED) {
+for (const [id, expected, mustMention] of EXPECTED) {
+  stage = `checking the ${id} example`;
   process.stdout.write(`${id.padEnd(12)} ${expected.padEnd(13)} `);
   await devtools.send('Page.navigate', { url: `${origin}/?example=${id}` });
   await sleep(200);
@@ -327,6 +371,13 @@ for (const [id, expected] of EXPECTED) {
     "JSON.stringify(Array.from(document.querySelectorAll('#verdict .facts dd')).map(d => d.innerText))",
   );
   const [, , took = '-', peak = '-'] = JSON.parse(facts ?? '[]');
+
+  if (mustMention !== undefined && !String(state).includes(mustMention)) {
+    failures.push(
+      `${id}: the panel never mentions ${JSON.stringify(mustMention)}. An ` +
+        'UNSUPPORTED verdict has to say what to do about it.',
+    );
+  }
 
   const agrees = reported === expected;
   if (!agrees) {
@@ -385,6 +436,7 @@ if (failures.length > 0) {
   devtools.close();
   process.exit(1);
 }
+clearTimeout(watchdog);
 console.log('');
 console.log('every example reported the verdict the CLI reports');
 console.log('every request stayed on this page\'s own origin');
