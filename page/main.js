@@ -208,17 +208,47 @@ function renderTooLarge(name, bytes) {
   dom.verdict.focus();
 }
 
-function renderInternal(detail) {
+/** This device could not hold the files. Not a verdict, and not the ceiling. */
+function renderExhausted(needBytes, detail) {
+  const megabytes = (needBytes / (1024 * 1024)).toFixed(1);
   panel(
     [
-      wordLine('Internal error', '!'),
+      wordLine('Not enough memory on this device', '!'),
       el(
         'p',
         'detail',
-        'The checker stopped without reaching a verdict. This is a defect in ' +
-          'the checker, not a statement about your proof.',
+        `This tab could not hold ${megabytes} MB of formula and proof. The ` +
+          'page allows up to ' +
+          `${MAX_INPUT_LABEL} per file, but that ceiling was measured on a ` +
+          'desktop and your device has less to give. Nothing was checked, and ' +
+          'this says nothing about the proof.',
       ),
-      code(detail),
+      code(
+        `refute ${chosen.cnf?.name ?? 'formula.cnf'} ${chosen.proof?.name ?? 'proof.drat'}`,
+      ),
+    ],
+    'done too-large',
+  );
+  dom.verdict.focus();
+}
+
+function renderInternal(detail) {
+  panel(
+    [
+      wordLine('Stopped without a verdict', '!'),
+      el(
+        'p',
+        'detail',
+        'The checker stopped part-way through. Either it ran out of memory on ' +
+          'this device or it has a defect; the two look identical from here, ' +
+          'and guessing between them would be worse than saying so. Either ' +
+          'way it is not a statement about your proof — the command-line tool ' +
+          'streams the proof and has no such limit.',
+      ),
+      code(
+        `refute ${chosen.cnf?.name ?? 'formula.cnf'} ${chosen.proof?.name ?? 'proof.drat'}`,
+      ),
+      el('p', 'detail', detail),
     ],
     'done internal',
   );
@@ -352,6 +382,9 @@ function run() {
         break;
       case 'refused':
         renderTooLarge(files.proof, chosen.proof.bytes.byteLength);
+        break;
+      case 'exhausted':
+        renderExhausted(message.needBytes, message.detail);
         break;
       case 'internal':
         renderInternal(message.detail);

@@ -383,6 +383,12 @@ decision taken with the file size in hand — one byte over the ceiling allocate
 nothing at all — and it names the exact `refute` command instead of offering a
 retry, because a retry after an out-of-memory is a lie.
 
+32 MB was measured on a desktop, and no phone has been measured. So the page
+does not rely on the ceiling being right: if a device cannot hold the files, the
+reserve fails, and that failure is caught and shown as *Not enough memory on
+this device* with the command to run instead. A wrong ceiling is a legible
+failure rather than a blank tab.
+
 WebAssembly costs about a fifth in speed, not an order of magnitude: 1.21x
 native on the largest artefact measured.
 
