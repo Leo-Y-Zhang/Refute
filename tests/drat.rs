@@ -61,20 +61,38 @@ fn rejection(verdict: Verdict) -> refute::Rejection {
     }
 }
 
-/// The proof was read and found wanting, rather than not read at all.
+/// The proof was read, a named candidate's resolvent did not follow, and the
+/// message says which and on what pivot.
 ///
-/// Every negative here is `s NOT VERIFIED` against the milestone-1b binary,
-/// because the LRAT reader cannot parse a DRAT file and a proof we cannot read
-/// is a proof we cannot accept. A test that asserted only the verdict would be
-/// green before the checker existed and green after it was deleted. This is
-/// the narrowest thing that is true of all five and false of a parse failure.
-fn assert_checked_and_rejected(cnf: &str, proof: &str) {
-    let reason = rejection(common::verdict(cnf, proof)).reason;
-    assert!(
-        !matches!(reason, Reason::Parse(_)),
-        "{proof} was not read at all: {reason}"
+/// Written first as "rejected, and not a parse error", which is all the
+/// milestone-1b binary could be held to: every DRAT file was `s NOT VERIFIED`
+/// there because the LRAT reader could not read it, and a test that asserted
+/// only the verdict would have been green before the checker existed and green
+/// after it was deleted. The exact pivot and candidate are recorded here now
+/// that there is a checker to produce them.
+///
+/// All eight mutants fail in the RAT candidate loop rather than on RUP, which
+/// is worth knowing and was not obvious: dropping or corrupting a lemma
+/// usually leaves a *later* lemma still derivable but no longer by propagation
+/// alone, so the failure surfaces a step or two past the mutation.
+fn assert_rat_check_failed(cnf: &str, proof: &str, pivot: i32, candidate: u64) {
+    let rejection = rejection(common::verdict(cnf, proof));
+    assert_eq!(
+        rejection.reason,
+        Reason::RatCheckFailed {
+            pivot: refute::Lit::new(pivot).expect("a non-zero pivot")
+        },
+        "{proof}"
     );
-    common::cli(cnf, proof).assert("s NOT VERIFIED", 1);
+    assert_eq!(rejection.resolvent, Some(candidate), "{proof}: candidate");
+    let run = common::cli(cnf, proof);
+    run.assert("s NOT VERIFIED", 1);
+    assert!(
+        run.stderr.contains(&format!("pivot {pivot}"))
+            && run.stderr.contains(&format!("{candidate}")),
+        "the message names neither the pivot nor the candidate: {:?}",
+        run.stderr
+    );
 }
 
 /// The two invariants every completed run satisfies, whatever it decided.
@@ -89,6 +107,15 @@ fn assert_run_invariants(stats: &refute::Stats, what: &str) {
         stats.assignments, stats.assignments_undone,
         "{what}: {} assignments, {} undone",
         stats.assignments, stats.assignments_undone
+    );
+    let classified = stats
+        .rup_additions
+        .saturating_add(stats.rat_additions)
+        .saturating_add(stats.tautological_additions);
+    assert_eq!(
+        classified, stats.additions,
+        "{what}: {classified} classified additions against {} checked",
+        stats.additions
     );
 }
 
@@ -118,6 +145,9 @@ fn p14_real_rat_proof_drat_verifies() {
     assert_eq!(stats.deletions, 75, "deletions");
     assert_eq!(stats.unknown_deletions, 0, "unknown deletions");
     assert_eq!(stats.peak_live_clauses, 61, "peak live clauses");
+    assert_eq!(stats.rup_additions, 71, "RUP additions");
+    assert_eq!(stats.rat_additions, 20, "RAT additions");
+    assert_eq!(stats.rat_candidates_checked, 24, "candidates checked");
     assert_run_invariants(&stats, "real_rat_proof.drat");
     common::cli("real_rat_proof.cnf", "real_rat_proof.drat").assert("s VERIFIED", 0);
 }
@@ -131,6 +161,9 @@ fn p15_rat_pigeonhole_drat_verifies() {
     assert_eq!(stats.additions, 702, "additions");
     assert_eq!(stats.deletions, 487, "deletions");
     assert_eq!(stats.peak_live_clauses, 348, "peak live clauses");
+    assert_eq!(stats.rup_additions, 630, "RUP additions");
+    assert_eq!(stats.rat_additions, 72, "RAT additions");
+    assert_eq!(stats.rat_candidates_checked, 108, "candidates checked");
     assert_run_invariants(&stats, "rat_pigeonhole.drat");
 }
 
@@ -178,7 +211,7 @@ fn p18_empty_clause_in_cnf_drat_verifies() {
 /// its reason.
 #[test]
 fn d1_addition_dropped_is_rejected() {
-    assert_checked_and_rejected("real_rat_proof.cnf", "d01_addition_dropped.drat");
+    assert_rat_check_failed("real_rat_proof.cnf", "d01_addition_dropped.drat", 21, 79);
 }
 
 /// D2. The last load-bearing addition dropped, so the rejection happens
@@ -189,12 +222,11 @@ fn d1_addition_dropped_is_rejected() {
 /// from anywhere else would be the right answer for the wrong reason.
 #[test]
 fn d2_needed_addition_dropped_fails_a_rat_candidate() {
-    let run = common::cli("real_rat_proof.cnf", "d02_needed_addition_dropped.drat");
-    run.assert("s NOT VERIFIED", 1);
-    assert!(
-        run.stderr.contains("not implied by unit propagation"),
-        "expected a RAT candidate failure, got {:?}",
-        run.stderr
+    assert_rat_check_failed(
+        "real_rat_proof.cnf",
+        "d02_needed_addition_dropped.drat",
+        -11,
+        83,
     );
 }
 
@@ -202,13 +234,13 @@ fn d2_needed_addition_dropped_fails_a_rat_candidate() {
 /// leave a valid proof.
 #[test]
 fn d3_literal_flipped_is_rejected() {
-    assert_checked_and_rejected("real_rat_proof.cnf", "d03_literal_flipped.drat");
+    assert_rat_check_failed("real_rat_proof.cnf", "d03_literal_flipped.drat", 21, 46);
 }
 
 /// D4. Two adjacent additions transposed.
 #[test]
 fn d4_additions_swapped_is_rejected() {
-    assert_checked_and_rejected("real_rat_proof.cnf", "d04_additions_swapped.drat");
+    assert_rat_check_failed("real_rat_proof.cnf", "d04_additions_swapped.drat", -21, 46);
 }
 
 /// D5. A lemma deleted on the line after it was added, and used later.
@@ -218,7 +250,7 @@ fn d4_additions_swapped_is_rejected() {
 /// this.
 #[test]
 fn d5_deleted_then_used_is_rejected() {
-    assert_checked_and_rejected("real_rat_proof.cnf", "d05_deleted_then_used.drat");
+    assert_rat_check_failed("real_rat_proof.cnf", "d05_deleted_then_used.drat", 21, 80);
 }
 
 /// D6. Truncated. Nothing was derived, so rejection is a theorem.
@@ -248,9 +280,11 @@ fn d7_no_empty_clause_is_rejected() {
 /// pipeline that passes it certifies a false upper bound.
 #[test]
 fn d8_satisfiable_formula_is_rejected() {
-    assert_checked_and_rejected(
+    assert_rat_check_failed(
         "d08_satisfiable_formula.cnf",
         "d08_satisfiable_formula.drat",
+        -9,
+        3,
     );
 }
 
@@ -264,15 +298,14 @@ fn d8_satisfiable_formula_is_rejected() {
 /// passes: the first candidate here does pass.
 #[test]
 fn d9_trail_leak_between_candidates_is_rejected() {
-    let run = common::cli(
+    // Candidate 2, not candidate 1: the first candidate passes, and a checker
+    // that stopped there, or that left its propagations on the trail, never
+    // reaches the one that fails.
+    assert_rat_check_failed(
         "d09_trail_leak_between_candidates.cnf",
         "d09_trail_leak_between_candidates.drat",
-    );
-    run.assert("s NOT VERIFIED", 1);
-    assert!(
-        run.stderr.contains("not implied by unit propagation"),
-        "expected a RAT candidate failure, got {:?}",
-        run.stderr
+        1,
+        2,
     );
 }
 
@@ -283,15 +316,13 @@ fn d9_trail_leak_between_candidates_is_rejected() {
 /// candidate disappears and this satisfiable formula is refuted.
 #[test]
 fn d10_duplicate_clause_deleted_once_is_rejected() {
-    let run = common::cli(
+    // The surviving copy is candidate 2. A store that removed both, or one
+    // keyed by literal set that never held two, has no candidate 2 at all.
+    assert_rat_check_failed(
         "d10_duplicate_clause_deleted_once.cnf",
         "d10_duplicate_clause_deleted_once.drat",
-    );
-    run.assert("s NOT VERIFIED", 1);
-    assert!(
-        run.stderr.contains("not implied by unit propagation"),
-        "expected a RAT candidate failure, got {:?}",
-        run.stderr
+        1,
+        2,
     );
 }
 
@@ -523,4 +554,50 @@ fn the_optional_check_verb_changes_nothing() {
     bare.assert("s VERIFIED", 0);
     verb.assert("s VERIFIED", 0);
     assert_eq!(bare.stderr, verb.stderr);
+}
+
+/// `--stats` prints the DRAT counter line only when the DRAT checker ran.
+///
+/// A counter block full of zeroes teaches a reader that the numbers do not
+/// mean anything, which is the opposite of why they exist.
+#[test]
+fn the_drat_counter_line_is_printed_only_for_a_drat_run() {
+    let drat = common::cli_args(&[
+        "--stats".to_owned(),
+        common::fixture("real_rat_proof.cnf")
+            .to_string_lossy()
+            .into_owned(),
+        common::fixture("real_rat_proof.drat")
+            .to_string_lossy()
+            .into_owned(),
+    ]);
+    let lrat = common::cli_args(&[
+        "--stats".to_owned(),
+        common::fixture("real_rat_proof.cnf")
+            .to_string_lossy()
+            .into_owned(),
+        common::fixture("real_rat_proof.lrat")
+            .to_string_lossy()
+            .into_owned(),
+    ]);
+    drat.assert("s VERIFIED", 0);
+    lrat.assert("s VERIFIED", 0);
+    assert!(
+        drat.stderr.contains("occurrence updates"),
+        "no DRAT counter line: {:?}",
+        drat.stderr
+    );
+    assert!(
+        !lrat.stderr.contains("occurrence updates"),
+        "the DRAT counter line was printed for an LRAT run: {:?}",
+        lrat.stderr
+    );
+    // The bet, made observable on a reader's own proof: 593 index slot
+    // updates against the scan this file would have cost, which is 20 RAT
+    // additions times a database averaging some forty live clauses.
+    assert!(
+        drat.stderr.contains("593 occurrence updates"),
+        "the occurrence count moved: {:?}",
+        drat.stderr
+    );
 }

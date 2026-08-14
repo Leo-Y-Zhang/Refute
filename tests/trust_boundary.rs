@@ -48,7 +48,7 @@ fn strip_comments(source: &str) -> String {
 /// here rather than counting them is that a *third* checker — or a helper that
 /// grew a shortcut — has to be added to this list by hand, in a diff a reviewer
 /// sees.
-const WITNESS_SITES: [&str; 1] = ["checker.rs"];
+const WITNESS_SITES: [&str; 2] = ["checker.rs", "drat/checker.rs"];
 
 /// Every occurrence of `needle` in the library, with the file it was found in.
 ///

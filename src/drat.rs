@@ -20,6 +20,7 @@
 //! disjoint, so relaxing it would weaken format detection as well.
 
 pub(crate) mod checker;
+pub(crate) mod store;
 
 use std::io::{BufRead, Read};
 

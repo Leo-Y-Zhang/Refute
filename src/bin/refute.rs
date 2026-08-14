@@ -150,6 +150,22 @@ fn run() -> u8 {
             counters.candidates_examined,
             counters.resolution_candidates
         );
+        // Only when the DRAT checker ran, so the block is never a wall of
+        // zeroes. `occurrence updates` is the one performance bet in milestone
+        // 2, made observable on a reader's own proof rather than re-argued
+        // from the design's measurements.
+        if outcome.format == Format::Drat {
+            eprintln!(
+                "refute: {} RUP additions, {} tautological, {} candidates checked, \
+                 {} propagations, {} watch visits, {} occurrence updates",
+                counters.rup_additions,
+                counters.tautological_additions,
+                counters.rat_candidates_checked,
+                counters.propagations,
+                counters.watch_visits,
+                counters.occurrence_updates
+            );
+        }
     }
 
     // One match, no wildcard arm: a new verdict variant must be handled here
