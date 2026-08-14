@@ -1062,6 +1062,47 @@ mod tests {
         assert_eq!(store.next_id(), 722, "an identifier moved");
     }
 
+    /// The reported size is at least the two largest things the store owns.
+    ///
+    /// The control that pins the arena term of `store_bytes`, and it took two
+    /// attempts to find one that could fail. The arena cannot be told apart
+    /// from the occurrence index by *size*: the index holds one 4-byte
+    /// identifier per literal of every clause added and the arena holds one
+    /// 4-byte literal, so any `>=` against a single reported figure passes
+    /// with either one of them dropped. Comparing a compacted run against an
+    /// uncompacted one worked until the purge learnt to `shrink_to_fit`, after
+    /// which both terms moved together.
+    ///
+    /// So this measures the two terms **independently, from the containers
+    /// themselves**, and requires the reported total to cover both. Duplicate
+    /// clauses on purpose: 200 copies of one 50-literal body share a single
+    /// deletion-index key, so every other term in the sum is small enough that
+    /// dropping either of these two is visible.
+    #[test]
+    fn the_reported_size_covers_the_arena_and_the_occurrence_index() {
+        let cnf = parse_dimacs("p cnf 60 0\n".as_bytes(), &Limits::default()).expect("a formula");
+        let mut store = Store::new(&cnf, &Limits::default());
+        let body: Vec<Lit> = (10..60).map(lit).collect();
+        assert_eq!(body.len(), 50);
+        for _ in 0..200 {
+            store.add(&body);
+        }
+
+        let arena = store.lits.capacity().saturating_mul(size_of::<Lit>());
+        let mut index = 0usize;
+        for slot in &store.occ {
+            index = index.saturating_add(slot.capacity().saturating_mul(size_of::<u32>()));
+        }
+        assert!(arena > 0 && index > 0, "the fixture stopped filling either");
+
+        let reported = store.footprint().store_bytes;
+        assert!(
+            reported >= arena.saturating_add(index),
+            "the store reports {reported} bytes while holding {arena} of arena \
+             and {index} of occurrence lists"
+        );
+    }
+
     /// `store_bytes` counts the arena, so compacting the arena moves it.
     ///
     /// Written because the mutation-kill pass found the rule unpinned: taking
