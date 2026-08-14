@@ -58,20 +58,40 @@ self.onmessage = async (event) => {
   // reads the buffer, grows the memory, and hands Uint8Array a detached corpse.
   // Take every offset first; read memory.buffer last; never cache a view across
   // an export call.
-  const cnfOffset = exports.cnf_reserve(cnfBytes.length);
-  const proofOffset = exports.proof_reserve(proofBytes.length);
-  if (cnfOffset === 0 || proofOffset === 0) {
-    // The page refuses on size before it gets here, so this is the module's own
-    // second opinion rather than the path a user travels.
-    self.postMessage({ kind: 'refused' });
+  // Reserving is where the memory is actually taken, and it is the one step
+  // that can fail on a device smaller than the one the ceiling was measured on.
+  // The module's allocator has nothing to return but a trap when `memory.grow`
+  // refuses, and an uncaught trap in a worker is a blank panel. This is the
+  // difference between a page that says "this device has not got the memory,
+  // here is the command" and a page that appears to have died.
+  //
+  // 32 MB was measured on a desktop. No phone has been measured. That is
+  // exactly why this path exists rather than being left to the ceiling.
+  let cnfOffset;
+  let proofOffset;
+  try {
+    cnfOffset = exports.cnf_reserve(cnfBytes.length);
+    proofOffset = exports.proof_reserve(proofBytes.length);
+    if (cnfOffset === 0 || proofOffset === 0) {
+      // The page refuses on size before it gets here, so this is the module's
+      // own second opinion rather than the path a user travels.
+      self.postMessage({ kind: 'refused' });
+      return;
+    }
+    new Uint8Array(exports.memory.buffer, cnfOffset, cnfBytes.length).set(
+      cnfBytes,
+    );
+    new Uint8Array(exports.memory.buffer, proofOffset, proofBytes.length).set(
+      proofBytes,
+    );
+  } catch (error) {
+    self.postMessage({
+      kind: 'exhausted',
+      needBytes: cnfBytes.length + proofBytes.length,
+      detail: String(error),
+    });
     return;
   }
-  new Uint8Array(exports.memory.buffer, cnfOffset, cnfBytes.length).set(
-    cnfBytes,
-  );
-  new Uint8Array(exports.memory.buffer, proofOffset, proofBytes.length).set(
-    proofBytes,
-  );
 
   const started = performance.now();
   let code;
@@ -79,9 +99,12 @@ self.onmessage = async (event) => {
     code = exports.check();
   } catch (error) {
     // A panic in the checker is a trap here, because the module is built with
-    // panic = "abort". It is reported as an internal error and never as a
-    // verdict: a page that turned a crash into "NOT VERIFIED" would be
-    // accusing a proof of something the checker never established.
+    // panic = "abort". So is running out of memory part-way through, and the
+    // two are the same RuntimeError with the same text — nothing here can tell
+    // them apart, and the panel says so rather than picking one. What it must
+    // never do is report either as a verdict: a page that turned a crash into
+    // "NOT VERIFIED" would accuse a proof of something the checker never
+    // established.
     self.postMessage({ kind: 'internal', detail: String(error) });
     return;
   }

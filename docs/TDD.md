@@ -2950,6 +2950,25 @@ now, and fails if it never sees the module fetched at all.
   binds every interface and prints an address a phone on the same network can
   open. WebAssembly and workers both run over plain HTTP, so no certificate is
   involved, and the gate keeps the order it is written in.
+
+  **What the phone measurement is now for has narrowed, deliberately.** It was
+  the only thing standing between a small device and a blank tab, because
+  reserving is where the memory is actually taken and the module's allocator
+  has nothing to return but a trap when `memory.grow` refuses. An uncaught trap
+  in a worker is a panel that never fills. That path is now caught and reported
+  as *Not enough memory on this device*, with the CLI command and an explicit
+  statement that nothing was checked — observed by forcing a `RuntimeError` at
+  the reserve and watching all five examples produce it.
+
+  So the ceiling being wrong on a phone is no longer a silent failure; it is a
+  legible one. What the measurement still buys is knowing **whether** it is
+  wrong, and whether the layout and the touch targets work at all. That is
+  worth doing and it is not worth blocking on.
+
+  A trap *during* `check()` is a different matter and is reported honestly
+  rather than confidently: a panic and an out-of-memory are the same
+  `RuntimeError` with the same text, nothing in the page can tell them apart,
+  and the panel says so instead of picking one.
 - **Step 10.** The page is not published and the README does not link it.
   Publishing is the owner's, from the Actions tab, and enabling Pages in the
   repository settings is a separate act that is also the owner's.
