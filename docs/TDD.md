@@ -2749,11 +2749,27 @@ part 4's fuzz coverage counter follows.
    take has not been measured — that is rollback step 2 — and this question
    should be answered *after* it rather than before. **Blocks calling the
    milestone done, not starting it.**
-2. **Which certificate does the page preload?** The PRD's answer names the
-   A217236 a(4) rung at ~2.5 MB. The artefact measured here is the **A217058**
-   a(4) rung, which is 2,508,578 bytes and matches that description exactly, so
-   one of the two names is wrong and the owner should say which. *Not a blocker
-   for the design; it is a blocker for the page's copy.*
+2. **Which certificate does the page preload? The PRD's answer names one that
+   cannot be built.** It says the A217236 a(4) rung, ~2.5 MB. Both halves were
+   checked rather than taken:
+
+   - **A217236 has no published a(4)**, so there is no refutation of it to
+     certify. Its published list is `[55, 71, 75, 79]` and stops at a(3); the
+     generator refuses with *"A217236 has no published a(4) to certify"*. The
+     `cert_A217236_a4_*` files in the author's `MathRecords` are **colouring**
+     witnesses for a lower bound, which is the opposite artefact — they exhibit
+     a colouring, where the playground needs a proof that none exists.
+   - **That family's largest real rung is 521 MB.** A217236 a(3), n=79, built
+     to check the claim rather than argue it: 521,385,154 bytes of DRAT, 81 s
+     to solve and 102 s for `drat-trim` to replay. Two hundred times the size
+     the PRD describes, six times the largest artefact this project has ever
+     checked, and four times the page's own refusal ceiling.
+
+   The ~2.5 MB artefact matching the PRD's own description is the **A217058**
+   a(4) rung, 2,508,578 bytes, which is what part 5 measured at 8.4 MB and
+   0.85 s. Proposed: the page preloads that, and the PRD's answer is corrected
+   rather than reinterpreted. **Blocks the page's preloaded asset and its copy,
+   not the design.**
 3. **Does the `.wasm` get committed, or built in the workflow?** Committing it
    makes the page reproducible from a clone and puts a 73 KB binary in the tree
    that no reader can diff. Proposed: built in the workflow, with the build

@@ -168,7 +168,14 @@ All three were answered by the owner on 2026-08-13.
    matching the author's other public repositories. The earlier
    "no personal name" proposal read the privacy rule more broadly than it is
    written; the public name is public.
-3. **Playground certificate set (M4).** **Answered:** the playground preloads
+3. **Playground certificate set (M4).** **Answered, and the answer names an
+   artefact that cannot be built — see TDD part 5, open question 2.** A217236
+   has no published a(4), so there is no refutation of it to certify (its list
+   is `[55, 71, 75, 79]`), and that family's largest real rung, a(3) at n=79,
+   was built to check: **521 MB** of DRAT. The ~2.5 MB certificate the answer
+   describes is the **A217058** a(4) rung, 2,508,578 bytes, measured in a
+   browser at 8.4 MB and 0.85 s. Proposed correction: preload that one. The
+   answer as originally recorded: the playground preloads
    the A217236 a(4)-rung DRAT certificate (~2.5 MB) as the demonstration;
    larger proofs remain native-CLI territory. The colouring certificates may
    get a small separate widget later and are not part of the M4 gate.
