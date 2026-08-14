@@ -297,27 +297,23 @@ impl Store {
         self.live_lits = self.live_lits.saturating_sub(key.len());
         self.dead_lits = self.dead_lits.saturating_add(key.len());
 
-        // Not counted. `occurrence_updates` is the design's price for the
-        // index and the trigger for abandoning it, and the price it was
-        // written to report is not the one being paid: it counts one per
-        // literal cleared and says nothing about the linear search each
-        // clearing performs over a list holding every live clause with that
-        // literal in it. Counted directly, that search compares 200,595,972
-        // entries on the A217058 a(4) rung and 31,076,047,076 on the a(7)
-        // rung — to answer 234 and 384 candidate queries respectively.
+        // The occurrence index is deliberately not touched here. It used to be
+        // cleared literal by literal, and each clearing was a linear search
+        // over a list holding every live clause containing that literal:
+        // 200,595,972 entries compared on the A217058 a(4) rung and
+        // 31,076,047,076 on the a(7) rung, to answer 234 and 384 candidate
+        // queries. An order of magnitude more work than propagation, which is
+        // the thing the checker is supposed to be doing.
         //
-        // A counter whose number is four orders of magnitude below the cost it
-        // is named for is worse than no counter, so it now counts insertions
-        // and only insertions, and the query side is reported separately by
-        // `occurrence_entries_filtered`.
-        for lit in &key {
-            let occ_code = code(*lit);
-            if let Some(slot) = self.occ.get_mut(occ_code) {
-                if let Some(at) = slot.iter().position(|held| *held == id) {
-                    slot.swap_remove(at);
-                }
-            }
-        }
+        // A stale entry is safe in the only direction that matters and it is
+        // worth being explicit about why. Completeness is what soundness rests
+        // on: every clause containing a literal was pushed onto that literal's
+        // list when it was added, and nothing removes an identifier except a
+        // compaction, which drops only clauses that are dead. So a list is
+        // always a superset of the candidates. `resolution_candidates` then
+        // re-derives membership from the store rather than trusting the list,
+        // which turns a stale entry into a dropped entry and never into a
+        // missed candidate.
         match key.len() {
             0 => self.empties = self.empties.saturating_sub(1),
             1 => {
@@ -399,6 +395,21 @@ impl Store {
         let mut occ = std::mem::take(&mut self.occ);
         for slot in &mut occ {
             slot.retain(|id| self.is_live(*id));
+            // `retain` does not give capacity back, and with deletion no
+            // longer touching the index that capacity is every clause ever
+            // added holding the literal rather than every live one. Measured
+            // on the a(7) rung, and this line is the difference between the
+            // lazy index being worth having and not:
+            //
+            //   without   34.1 MB peak working set, 25.2 MB accounted
+            //   with      31.2 MB peak working set, 18.7 MB accounted
+            //   eager     31.7 MB peak working set, 22.5 MB accounted
+            //
+            // Reallocating every non-empty slot at every compaction is 44
+            // compactions times some hundreds of slots on that proof, and it
+            // makes the run faster rather than slower, which is measurement
+            // and not a reason.
+            slot.shrink_to_fit();
         }
         self.occ = occ;
         self.stats.compactions = self.stats.compactions.saturating_add(1);
@@ -417,21 +428,53 @@ impl Store {
     /// a borrow of the index across that would be a lie about what the loop
     /// can touch.
     ///
-    /// Takes `&mut self` because it counts. The entries it walks are the price
-    /// of the index on the query side, and the trigger for abandoning it is
-    /// written against that number in `docs/TDD.md` part 4. Counting inside
-    /// the function is what keeps the figure honest if the body ever becomes a
-    /// filter or a scan.
+    /// Takes `&mut self` because it counts, and because it writes the filtered
+    /// list back. The entries it walks are the whole price of the index now
+    /// that deletion pays nothing, and the trigger for abandoning it is
+    /// written against that number: **if a real proof reports more
+    /// `occurrence_entries_filtered` than `rat_additions` times
+    /// `peak_live_clauses`, the index is losing to a plain scan of the live
+    /// clauses and this function should become one.** One function, exactly as
+    /// part 3 wrote the trigger it lost.
+    ///
+    /// **The filter is a predicate over the store, not a trust in the list.**
+    /// A candidate is returned because its clause is live *and* because it
+    /// really does contain the negated pivot, both re-derived here. That is
+    /// what makes a stale entry harmless: an entry that should not be there is
+    /// dropped, and an entry that should be there was never removed, because
+    /// nothing removes one except a compaction and a compaction drops only
+    /// clauses that are dead.
+    ///
+    /// The containment check is belt rather than brace — every identifier in
+    /// `occ[l]` was pushed because its clause held `l`, and a clause's
+    /// literals never change. It is here because it costs a walk of a clause
+    /// that is about to be walked anyway, and because the alternative is a
+    /// soundness argument that rests on two invariants instead of one.
     pub(crate) fn resolution_candidates(&mut self, pivot: Lit) -> Vec<u32> {
-        let ids = match self.occ.get(code(pivot.negate())) {
+        let want = pivot.negate();
+        let slot = code(want);
+        let held = match self.occ.get(slot) {
             Some(ids) => ids.clone(),
-            None => Vec::new(),
+            None => return Vec::new(),
         };
         self.stats.occurrence_entries_filtered = self
             .stats
             .occurrence_entries_filtered
-            .saturating_add(u64::try_from(ids.len()).unwrap_or(u64::MAX));
-        ids
+            .saturating_add(u64::try_from(held.len()).unwrap_or(u64::MAX));
+
+        let mut kept = Vec::with_capacity(held.len());
+        for id in held {
+            if self.is_live(id) && self.slice(id).contains(&want) {
+                kept.push(id);
+            }
+        }
+        // Written back, so the same query does not pay for the same dead
+        // entries twice. With compaction purging the lists as well, the a(7)
+        // rung's queries walk 384 entries in total — one per candidate.
+        if let Some(ids) = self.occ.get_mut(slot) {
+            ids.clone_from(&kept);
+        }
+        kept
     }
 
     /// The literals of a clause, in the arena's order.
