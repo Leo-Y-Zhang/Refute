@@ -1,0 +1,40 @@
+[package]
+name = "refute-wasm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "The WebAssembly export boundary for the Refute proof checker"
+publish = false
+
+# A dynamic library with no dynamic linker behind it: on
+# `wasm32-unknown-unknown` this is what produces a `.wasm` module with exported
+# symbols, and on the host it is what lets `cargo test --workspace` compile the
+# same code the browser will run.
+[lib]
+crate-type = ["cdylib"]
+
+# One dependency, by path, and it is the checker itself. The no-dependency rule
+# in docs/PRD.md is what makes the module 73,699 bytes and makes its audit
+# surface the same source a reader can already read.
+[dependencies]
+refute = { path = ".." }
+
+# The checker package forbids `unsafe_code`. This one cannot: `#[no_mangle]` is
+# `unsafe_code` to the lint, and without it there is no exported symbol and no
+# module. So the lint is `deny` here instead, and the three exports lift it one
+# item at a time with the reason written above each — which is a diff a reviewer
+# sees, where a manifest that simply said nothing would not be.
+#
+# The rest of the floor is the checker's, unchanged. A panic in the module is a
+# trap, and a trap in a browser tab is a blank page.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"

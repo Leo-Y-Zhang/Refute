@@ -303,3 +303,119 @@ input → Check → verdict panel, which receives focus and is an
 keyboard. Verdict is never conveyed by colour alone: the word `VERIFIED` /
 `NOT VERIFIED` / `UNSUPPORTED` is always present in text, with a shape (check /
 cross / dash) beside it.
+
+---
+
+## Part 2b — what the milestone-4 probe changed about part 2 (2026-08-14)
+
+Part 2 was written before anything was built. A throwaway WASM module and a
+Node harness now exist — see `docs/TDD.md` part 5 — and three of its rows can
+stop being predictions.
+
+### The "memory exceeded" row is now a number
+
+Part 2 says a 200 MB proof will not check in a tab and that a retry button
+would be a lie. Measured, per rung: peak linear memory is roughly the proof
+plus the store plus a megabyte, so the a(4) rung the page preloads takes
+**8.4 MB**, and the a(7) rung takes **124.9 MB** of which 83.4 MB is the file
+itself.
+
+The page therefore **refuses above 32 MB of proof, before it instantiates
+anything**, rather than discovering the problem by dying. That is the honest
+version of the same row: the refusal is a decision the page makes with the file
+size in hand, not a crash it reports afterwards.
+
+### "Checking" has a real duration now
+
+WASM is **1.21x** slower than the native binary, not the order of magnitude a
+sandbox is often assumed to cost. The preloaded a(4) rung is **0.85 s**, which
+is fast enough that the progress indicator part 2 specifies is for honesty
+rather than for patience — and slow enough that it must exist.
+
+The Web Worker in part 2 stays, and for a reason the measurement sharpened: at
+32 MB of proof the check is a few seconds, and a few seconds of frozen tab is
+the difference between a tool and a toy.
+
+### One new rule, in the glue rather than the design
+
+**Growing linear memory detaches every `ArrayBuffer` view of it.** The page must
+take the pointer from a reserve call *first* and read `memory.buffer` *second*,
+and must never cache a `Uint8Array` across an export call. Written down here
+because the probe's own harness got it wrong and failed with a `TypeError` on a
+line that looked correct.
+
+And **one instance per check**: `memory.grow` has no inverse, so linear memory
+is a high-water mark that only a dropped instance reclaims. Checking two proofs
+on one instance charges the second for the first.
+
+### What does not change
+
+Every entry point, every state, every dead end, the permissions row and the
+accessibility path are as part 2 wrote them. The privacy claim in particular is
+unchanged and now has a mechanism behind it: the module has **no imports at
+all**, so it cannot call out, and a `Content-Security-Policy` restricted to the
+page's own origin makes the network tab the proof rather than the promise.
+
+---
+
+## Part 2c — what the built page does, against what part 2 predicted (2026-08-14)
+
+Part 2 was written before anything existed and part 2b corrected it from a
+probe. This is the page as built: `page/index.html`, `page/style.css`,
+`page/main.js`, `page/worker.js`, `page/limits.js`, `page/favicon.svg`. No
+framework, no dependency, nothing fetched from another origin.
+
+Every row below is checked on every push by `tools/browser_check.mjs`, which
+drives headless Chrome against the built artefact and reads the verdict out of
+the DOM.
+
+### Rows that are as part 2 wrote them
+
+- **Landing.** One sentence, a row of preloaded examples, two file inputs, a
+  Check button that stays disabled until both files are chosen.
+- **Checking.** On a Web Worker, with a cancel control. Cancelling terminates
+  the worker, which is also how its memory comes back.
+- **Memory exceeded.** No retry button. It names the file, its size, the
+  ceiling, and prints the exact `refute` command.
+- **Permissions.** None. No accounts, no storage, no cookies, no telemetry.
+  A `Content-Security-Policy` of `default-src 'self'` with `'wasm-unsafe-eval'`
+  for the module and nothing else.
+- **Accessibility.** Skip link, real `<input type=file>` elements beside the
+  drop zones, the verdict panel an `aria-live="polite"` region that takes
+  focus, and the verdict word always present as text with a shape beside it.
+
+### Rows that changed, and why
+
+**"Progress by steps checked" is elapsed time instead.** The module returns a
+verdict and nothing else in this milestone, so there is no step count to show.
+A bar that moved anyway would be an animation, not information. The panel shows
+seconds elapsed, which is true, and the footer says in as many words that the
+failing step, the line and the reason are the CLI's for now.
+
+**The verdict panel shows peak memory.** It was not in part 2 and it is the one
+number a reader can use to predict whether their own proof will fit.
+
+**A new state: "Example not available".** Part 2 has no row for a preloaded
+example that fails to load, and the first version of the page had no handling
+for it — `fetch(...).arrayBuffer()` on a 404 returns the error page's body, the
+checker read it as an unparseable formula, and the panel reported **NOT
+VERIFIED**. A verdict, about a file that was never fetched. The page checks
+`response.ok` now and says the link is broken, which is what it is. Nothing on
+this page may report a verdict about something it did not check.
+
+**The preloaded examples are committed fixtures, not the a(4) rung.** Five of
+them, covering all three verdicts, including `vdw_a217058_n21` — a real
+certificate of a published van der Waerden term at 20 KB. The ~2.5 MB a(4) rung
+the PRD names is not committed; see TDD part 5, open question 2, which is the
+owner's.
+
+**A deep link runs on arrival**, as part 2 specifies: `?example=vdw-n21`. The
+identifiers are `tiny`, `vdw-n21`, `pigeonhole`, `corrupted` and `binary`.
+
+### The one thing the page will not do
+
+It will not show a verdict it did not receive from the module. Every panel that
+is not a verdict — too large, internal error, checker could not start, example
+not available — says what happened instead, and none of them uses a verdict
+word. A trap in the module is reported as an internal error, never as `NOT
+VERIFIED`, because a crash is not an accusation.

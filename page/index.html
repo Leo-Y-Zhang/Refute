@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Refute - check an unsatisfiability proof in your browser</title>
+    <meta
+      name="description"
+      content="An independent forward checker for DRAT and LRAT unsatisfiability proofs, running entirely in your browser. Nothing is uploaded."
+    />
+    <!--
+      The privacy claim below this page makes - your files are never uploaded -
+      has to be checkable from the network tab rather than believed. Everything
+      is same-origin and committed: no CDN, no analytics, no telemetry, no web
+      font, no error reporter.
+
+      'wasm-unsafe-eval' is what lets WebAssembly.instantiate run at all under a
+      policy this strict. It permits compiling a module; it does not permit eval
+      or inline script, and the module itself imports nothing, so there is
+      nothing for it to call even if it wanted to.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <a class="skip" href="#check">Skip to the checker</a>
+
+    <header>
+      <h1>Refute</h1>
+      <p class="lede">
+        A SAT solver answering <em>unsatisfiable</em> is an assertion, not a
+        proof. Drop a DIMACS formula and its DRAT or LRAT refutation below and
+        this page will check every step of it, here, in this tab.
+      </p>
+      <p class="privacy">
+        Nothing is uploaded. The checker is a 73 KB WebAssembly module that
+        imports nothing at all &mdash; it has no way to call out. Open the
+        network tab and watch.
+      </p>
+    </header>
+
+    <main>
+      <section aria-labelledby="examples-heading">
+        <h2 id="examples-heading">Start with an example</h2>
+        <p id="examples-note">
+          Each one is a file committed to this repository, checked on every
+          push.
+        </p>
+        <div id="examples" class="examples" role="group" aria-describedby="examples-note">
+          <p class="loading">Loading the checker&hellip;</p>
+        </div>
+      </section>
+
+      <section id="check" aria-labelledby="check-heading">
+        <h2 id="check-heading">Or check your own</h2>
+        <div class="drops">
+          <div class="drop" id="cnf-drop">
+            <label for="cnf-input">Formula <span class="hint">.cnf, DIMACS</span></label>
+            <input type="file" id="cnf-input" accept=".cnf,text/plain" />
+            <p class="chosen" id="cnf-chosen">No file chosen</p>
+          </div>
+          <div class="drop" id="proof-drop">
+            <label for="proof-input">Proof <span class="hint">.drat or .lrat, text</span></label>
+            <input type="file" id="proof-input" accept=".drat,.lrat,text/plain" />
+            <p class="chosen" id="proof-chosen">No file chosen</p>
+          </div>
+        </div>
+        <p class="controls">
+          <button type="button" id="run" disabled>Check</button>
+          <button type="button" id="cancel" hidden>Cancel</button>
+        </p>
+      </section>
+
+      <!--
+        aria-live="polite" and tabindex="-1": the verdict is announced when it
+        arrives and the panel takes focus, so a keyboard or screen-reader user
+        is not left on a button wondering whether anything happened.
+      -->
+      <section
+        id="verdict"
+        class="verdict"
+        aria-live="polite"
+        aria-atomic="true"
+        tabindex="-1"
+      >
+        <p class="idle">No proof checked yet.</p>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        This page checks; it does not explain. The failing step, the line and
+        the reason are the command-line tool's, for now.
+      </p>
+      <p>
+        <a href="https://github.com/Leo-Y-Zhang/Refute">Source, and the CLI</a>
+        &middot; MIT
+      </p>
+    </footer>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

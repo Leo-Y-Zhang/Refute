@@ -154,7 +154,7 @@ milestone 1b lands.
 | 1b | RAT hint blocks | The author's a(4)-rung certificate checks; `s UNSUPPORTED` becomes rare |
 | 2 | Direct DRAT checking; differential fuzzing vs `drat-trim -f` | The a(4)-rung raw `.drat` verifies with `drat-trim` out of the chain; 10k fuzz cases, zero false accepts |
 | 3 | Native CLI for large proofs | The a(7)-rung proof checks within a **stated** memory budget, from its raw `.drat` and from its `.lrat`. *The "~200 MB LRAT" this row used to say was an estimate: the artefact was built on 2026-08-14 and measures 117.5 MB of LRAT against 87.5 MB of raw DRAT* |
-| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser |
+| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser. **Gate met; not published.** *Built 2026-08-14, build order steps 2 to 7 of [TDD part 5](TDD.md#part-5--milestone-4-the-playground). The module is **73,165 bytes**, imports nothing at all, and agrees with the native checker on **all 67 committed pairs** and all three verdicts; the A217058 a(4) rung checks in **8.4 MB and 0.85 s**. Five preloaded examples run in headless Chrome on every push, verdicts read out of the DOM and compared against the CLI's, with every network request recorded and every one on the page's own origin. The export boundary lives in a second crate so `refute` keeps `unsafe_code = "forbid"`. **Publishing is the owner's**: the Pages workflow is `workflow_dispatch` only, and no phone has been measured* |
 | 5 | Benchmarks table in README | Like-for-like pipeline comparison, methodology stated |
 
 ## Open questions
@@ -168,7 +168,14 @@ All three were answered by the owner on 2026-08-13.
    matching the author's other public repositories. The earlier
    "no personal name" proposal read the privacy rule more broadly than it is
    written; the public name is public.
-3. **Playground certificate set (M4).** **Answered:** the playground preloads
+3. **Playground certificate set (M4).** **Answered, and the answer names an
+   artefact that cannot be built � see TDD part 5, open question 2.** A217236
+   has no published a(4), so there is no refutation of it to certify (its list
+   is `[55, 71, 75, 79]`), and that family's largest real rung, a(3) at n=79,
+   was built to check: **521 MB** of DRAT. The ~2.5 MB certificate the answer
+   describes is the **A217058** a(4) rung, 2,508,578 bytes, measured in a
+   browser at 8.4 MB and 0.85 s. Proposed correction: preload that one. The
+   answer as originally recorded: the playground preloads
    the A217236 a(4)-rung DRAT certificate (~2.5 MB) as the demonstration;
    larger proofs remain native-CLI territory. The colouring certificates may
    get a small separate widget later and are not part of the M4 gate.
@@ -752,7 +759,15 @@ alone.
 
 ## Open questions
 
-1. **Is 64 MB the right budget, or should it be the browser's?** Milestone 4
+1. **ANSWERED BY MEASUREMENT, 2026-08-14: 64 MB is right for native and does
+   not transfer to the browser.** The WASM probe in TDD part 5 measures the
+   a(7) rung at **124.9 MB** of linear memory, of which the store is 19.6 MB
+   and the proof itself is 83.4 MB: a page holds the whole file, where the CLI
+   streams it and holds one line. So the browser figure is set by the input,
+   not by the checker, and milestone 4 states a refusal on proof size instead
+   of a budget on the store. The original question, kept as written:
+
+   **Is 64 MB the right budget, or should it be the browser's?** Milestone 4
    puts this store in a WASM heap where 64 MB is generous and 256 MB is
    plausible but hostile to a phone. The budget proposed here is set by what
    the a(7) rung needs with headroom, not by a browser. **The owner's call, and

@@ -1,0 +1,286 @@
+/* One stylesheet, same origin, no web font.
+ *
+ * The type is whatever the reader's system provides. A font from another origin
+ * would be a request to somewhere else, and the claim this page makes is that
+ * there are none. */
+
+:root {
+  --bg: #fbfbf9;
+  --fg: #17181a;
+  --muted: #5b6068;
+  --rule: #d9d8d2;
+  --panel: #ffffff;
+  --accent: #1d4f3f;
+  --bad: #7a2222;
+  --warn: #6b4a12;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #e7e8ea;
+    --muted: #9aa1ab;
+    --rule: #2c3138;
+    --panel: #1b1e24;
+    --accent: #7fd4b4;
+    --bad: #f0a0a0;
+    --warn: #e2c489;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  max-width: 46rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 ui-serif, Georgia, 'Times New Roman', serif;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 2rem;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  margin: 2.5rem 0 0.5rem;
+  font-size: 1.05rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.lede {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+}
+
+.privacy,
+.hint,
+#examples-note,
+footer {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+a {
+  color: inherit;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+
+.skip:focus {
+  position: static;
+  display: inline-block;
+  margin-bottom: 1rem;
+}
+
+/* Examples ---------------------------------------------------------------- */
+
+.examples {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+}
+
+.example {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.7rem 0.85rem;
+  text-align: left;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.example:hover {
+  border-color: var(--accent);
+}
+
+.example-label {
+  font-weight: 600;
+}
+
+.example-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* Files ------------------------------------------------------------------- */
+
+.drops {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.drop {
+  padding: 0.85rem;
+  background: var(--panel);
+  border: 1px dashed var(--rule);
+  border-radius: 3px;
+}
+
+.drop.over {
+  border-color: var(--accent);
+  border-style: solid;
+}
+
+.drop label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.drop input[type='file'] {
+  max-width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.chosen {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.controls {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
+}
+
+button:not(.example) {
+  padding: 0.5rem 1.4rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--fg);
+  border: 1px solid var(--fg);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+button:not(.example):disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#cancel {
+  color: var(--fg);
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Verdict ----------------------------------------------------------------- */
+
+.verdict {
+  margin-top: 2rem;
+  padding: 1.1rem 1.25rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left-width: 4px;
+  border-radius: 3px;
+}
+
+.verdict.ok {
+  border-left-color: var(--accent);
+}
+
+.verdict.not-ok {
+  border-left-color: var(--bad);
+}
+
+.verdict.too-large,
+.verdict.internal {
+  border-left-color: var(--warn);
+}
+
+.verdict .idle,
+.verdict .state {
+  margin: 0;
+  color: var(--muted);
+}
+
+.verdict .word {
+  margin: 0 0 0.6rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.verdict.ok .word {
+  color: var(--accent);
+}
+
+.verdict.not-ok .word {
+  color: var(--bad);
+}
+
+.verdict.too-large .word,
+.verdict.internal .word {
+  color: var(--warn);
+  font-size: 1.2rem;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 1rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail {
+  margin: 0 0 0.5rem;
+  font-size: 0.92rem;
+}
+
+pre {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  overflow-x: auto;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+
+code {
+  font: 0.85rem/1.5 ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+}
+
+footer p {
+  margin: 0 0 0.35rem;
+}
