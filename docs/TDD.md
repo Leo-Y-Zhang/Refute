@@ -2429,7 +2429,7 @@ experiment got.
 
 # Part 5 — milestone 4: the playground
 
-**Status:** built, build order steps 2 to 7; **not published** · **Date:**
+**Status:** built and **published** — build order steps 2 to 10 · **Date:**
 2026-08-14 · **Supersedes:** nothing. No acceptance rule in parts 1 to 4 moves,
 and the checker crate is not edited at all. This milestone adds a second crate,
 a page, and a build step.
@@ -2969,9 +2969,14 @@ now, and fails if it never sees the module fetched at all.
   rather than confidently: a panic and an out-of-memory are the same
   `RuntimeError` with the same text, nothing in the page can tell them apart,
   and the panel says so instead of picking one.
-- **Step 10.** The page is not published and the README does not link it.
-  Publishing is the owner's, from the Actions tab, and enabling Pages in the
-  repository settings is a separate act that is also the owner's.
+- ~~**Step 10.**~~ **Done, 2026-08-14, on the owner's explicit word.** Pages
+  was enabled with GitHub Actions as the source, the `Pages` workflow was run,
+  and the deployment was then driven in a real browser through
+  `tools/browser_check.mjs --origin https://leo-y-zhang.github.io/Refute`:
+  five examples, five verdicts equal to the CLI's, 21 distinct requests and
+  every one of them on the page's own origin, the worker's fetch of the module
+  included. *Then* the README linked it, in that order. The workflow stays
+  `workflow_dispatch` only, so the next deploy is as deliberate as this one.
 - **The rejection detail.** The module returns a verdict and nothing else, so
   the page shows a verdict and nothing else, and says so in its own footer.
   That is open question 4, answered as proposed.
