@@ -184,10 +184,31 @@ mod tests {
         assert_eq!(format_of("\n\n"), Format::Lrat);
     }
 
+    /// A fragment is not a line, and must not be classified as one.
+    ///
+    /// The guard is `complete || at_eof`, so exercising it needs a head with
+    /// no newline anywhere in the peeked window AND at least `PEEK_BYTES` of
+    /// it -- otherwise `at_eof` carries the test on its own and the mutant
+    /// lives. The version this replaces ended its input in a newline, which
+    /// made `complete` true: it passed with the guard and passed with the
+    /// guard removed, which is to say it tested nothing.
+    ///
+    /// `-1` cannot open an LRAT step, so a classifier that read this
+    /// fragment would call the file DRAT on the strength of half a line.
     #[test]
     fn a_half_line_is_not_classified() {
-        let long = format!("1 {}0 1 0\n", "2 ".repeat(super::PEEK_BYTES));
-        assert_eq!(format_of(&long), Format::Lrat);
+        // The peeked window has to be a clause the DRAT grammar ACCEPTS,
+        // or the fragment is unclassifiable for a second reason and the
+        // guard is still not what decided it.
+        // Exactly a peek-full, with no newline: what the reader hands over
+        // when the first line runs past the window. The window has to hold
+        // a clause the DRAT grammar ACCEPTS, or the fragment is
+        // unclassifiable for a second reason and the guard is still not
+        // what decided it.
+        let fragment = format!("{}0", "-1 ".repeat((super::PEEK_BYTES - 1) / 3));
+        assert_eq!(fragment.len(), super::PEEK_BYTES);
+        assert!(!fragment.contains('\n'));
+        assert_eq!(format_of(&fragment), Format::Lrat);
     }
 
     #[test]

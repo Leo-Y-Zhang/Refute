@@ -106,17 +106,27 @@ fn verified_has_exactly_one_construction_site() {
 /// The evidence is built once per checker, in the checkers, and nowhere else.
 ///
 /// `EmptyClauseDerived` carries nothing, so its whole value is that it cannot
-/// be conjured: every construction is a literal `EmptyClauseDerived(())` that
-/// this grep finds. A checker that reached `Verified` without building one
-/// could not compile; a helper that built one on some other occasion would
-/// show up here as a third site.
+/// be conjured: every construction is caught by this grep. A checker that
+/// reached `Verified` without building one could not compile; a helper that
+/// built one on some other occasion shows up here as a further site.
+///
+/// The needle is the opening parenthesis and not the literal
+/// `EmptyClauseDerived(())`, because that spelling is evadable and was
+/// evaded: binding the unit first and writing `EmptyClauseDerived(nothing)`
+/// compiles a third route to `Verdict::Verified` and left all five of these
+/// tests green. The wider needle also matches the declaration in `verdict.rs`,
+/// which is why the count is one above the number of checkers.
 #[test]
 fn the_empty_clause_witness_is_built_once_per_checker() {
-    let sites = library_sites(&["EmptyClauseDerived(())"]);
+    let sites = library_sites(&["EmptyClauseDerived("]);
     assert_eq!(
         sites.len(),
-        WITNESS_SITES.len(),
-        "the empty-clause witness is built in {sites:?}; expected {WITNESS_SITES:?}"
+        WITNESS_SITES.len() + 1,
+        "the empty-clause witness is named in {sites:?}; expected {WITNESS_SITES:?}          plus its declaration in verdict.rs"
+    );
+    assert!(
+        sites.iter().any(|p| p.ends_with("verdict.rs")),
+        "the declaration is not in verdict.rs any more; sites are {sites:?}"
     );
     for expected in WITNESS_SITES {
         assert!(
