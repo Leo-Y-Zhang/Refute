@@ -829,6 +829,13 @@ mod tests {
     // worse. The integration tests lift the same half for the same reason.
     #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+    // Imported rather than inherited: `size_of` reached the prelude in Rust
+    // 1.80 and this package's stated minimum is 1.74, where the same line
+    // compiles on stable and fails on the MSRV leg with `cannot find function
+    // size_of in this scope`. Found by build order step 8 rather than by CI,
+    // which is the point of running both toolchains before pushing.
+    use std::mem::size_of;
+
     use super::{Store, UNSET};
     use crate::cnf::parse_dimacs;
     use crate::limits::Limits;
