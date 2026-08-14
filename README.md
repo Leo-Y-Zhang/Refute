@@ -322,9 +322,17 @@ provenance of each one.
 
 ## The playground
 
-There is a browser build. It is **not published yet** — this section describes
-how to run it locally, and nothing here links to a live page because there is
-not one.
+**<https://leo-y-zhang.github.io/Refute/>** — drop a formula and a proof, get a
+verdict. Nothing is installed and nothing is uploaded.
+
+Published 2026-08-14, after the checks below passed against the artefact that
+was deployed and then again against the deployment itself: five preloaded
+examples driven in a real browser, each verdict read out of the page and equal
+to the one the command-line tool gives, and every network request the page and
+its worker made recorded from the DevTools protocol — twenty-one of them, all
+on this page's own origin.
+
+To run it from a clone instead:
 
 ```
 rustup target add wasm32-unknown-unknown

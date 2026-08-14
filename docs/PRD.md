@@ -45,8 +45,11 @@ language, agreeing on the same artefacts, converts a single point of trust into 
       from "zero unexplained disagreements": a forward checker is legitimately
       stricter than a backward one, and 5 of 24 measured mutants are still valid
       proofs. The milestone-2 section states the full rule.*
-- [ ] (M4) A reader can drop a `.cnf` and `.lrat` into a web page with no install
-      and read a verdict.
+- [x] (M4) A reader can drop a `.cnf` and `.lrat` into a web page with no install
+      and read a verdict. **Met 2026-08-14: <https://leo-y-zhang.github.io/Refute/>,
+      verified in a real browser against the deployment itself — five examples, five
+      verdicts equal to the CLI's, and every one of 21 requests on the page's own
+      origin.**
 
 ## Requirements
 
@@ -154,7 +157,7 @@ milestone 1b lands.
 | 1b | RAT hint blocks | The author's a(4)-rung certificate checks; `s UNSUPPORTED` becomes rare |
 | 2 | Direct DRAT checking; differential fuzzing vs `drat-trim -f` | The a(4)-rung raw `.drat` verifies with `drat-trim` out of the chain; 10k fuzz cases, zero false accepts |
 | 3 | Native CLI for large proofs | The a(7)-rung proof checks within a **stated** memory budget, from its raw `.drat` and from its `.lrat`. *The "~200 MB LRAT" this row used to say was an estimate: the artefact was built on 2026-08-14 and measures 117.5 MB of LRAT against 87.5 MB of raw DRAT* |
-| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser. **Gate met; not published.** *Built 2026-08-14, build order steps 2 to 7 of [TDD part 5](TDD.md#part-5--milestone-4-the-playground). The module is **73,165 bytes**, imports nothing at all, and agrees with the native checker on **all 67 committed pairs** and all three verdicts; the A217058 a(4) rung checks in **8.4 MB and 0.85 s**. Five preloaded examples run in headless Chrome on every push, verdicts read out of the DOM and compared against the CLI's, with every network request recorded and every one on the page's own origin. The export boundary lives in a second crate so `refute` keeps `unsafe_code = "forbid"`. **Publishing is the owner's**: the Pages workflow is `workflow_dispatch` only, and no phone has been measured* |
+| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser. **Met and LIVE at <https://leo-y-zhang.github.io/Refute/>, 2026-08-14.** *Built 2026-08-14, build order steps 2 to 7 of [TDD part 5](TDD.md#part-5--milestone-4-the-playground). The module is **73,165 bytes**, imports nothing at all, and agrees with the native checker on **all 67 committed pairs** and all three verdicts; the A217058 a(4) rung checks in **8.4 MB and 0.85 s**. Five preloaded examples run in headless Chrome on every push, verdicts read out of the DOM and compared against the CLI's, with every network request recorded and every one on the page's own origin. The export boundary lives in a second crate so `refute` keeps `unsafe_code = "forbid"`. **Publishing is the owner's**: the Pages workflow is `workflow_dispatch` only, and no phone has been measured* |
 | 5 | Benchmarks table in README | Like-for-like pipeline comparison, methodology stated |
 
 ## Open questions

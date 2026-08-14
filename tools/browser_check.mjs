@@ -18,10 +18,17 @@
 // Usage:
 //
 //     node tools/browser_check.mjs [--browser <path>] [--port 8081] [--root dist]
-//                                    [--keep-open]
+//                                    [--origin https://...] [--keep-open]
 //
 // With --root it drives the built artefact rather than the working tree, which
 // is the version a reader would actually get.
+//
+// With --origin it drives a page that is already published, and starts no
+// server at all. That is the only way to check the thing that actually
+// shipped: a local artefact can be correct while the deployment of it is not,
+// and the request list from a real origin is the privacy claim as a reader
+// would be able to verify it. Requests to that origin count as same-origin;
+// everything else still fails.
 //
 // It starts its own static server and its own browser, and stops both.
 
@@ -68,6 +75,7 @@ const EXPECTED = [
 let browserPath = BROWSERS.find((p) => existsSync(p));
 let port = 8081;
 let root = null;
+let remoteOrigin = null;
 let keepOpen = false;
 for (let i = 2; i < process.argv.length; i += 1) {
   const arg = process.argv[i];
@@ -80,6 +88,9 @@ for (let i = 2; i < process.argv.length; i += 1) {
   } else if (arg === '--root') {
     i += 1;
     root = process.argv[i];
+  } else if (arg === '--origin') {
+    i += 1;
+    remoteOrigin = process.argv[i].replace(/\/$/, '');
   } else if (arg === '--keep-open') {
     keepOpen = true;
   }
@@ -90,7 +101,7 @@ if (browserPath === undefined) {
   process.exit(1);
 }
 
-const origin = `http://127.0.0.1:${port}`;
+const origin = remoteOrigin ?? `http://127.0.0.1:${port}`;
 const failures = [];
 
 // Nothing in this script may wait forever.
@@ -251,11 +262,13 @@ const profile = mkdtempSync(join(tmpdir(), 'refute-browser-'));
 // fifteen-minute timeout killed it — twice. There is no child, no pipe and no
 // handshake now.
 stage = 'starting the static server';
-const server = createPageServer({ root });
-await new Promise((resolve, reject) => {
-  server.once('error', reject);
-  server.listen(port, '127.0.0.1', resolve);
-});
+const server = remoteOrigin === null ? createPageServer({ root }) : null;
+if (server !== null) {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', resolve);
+  });
+}
 
 const browser = spawn(
   browserPath,
@@ -268,6 +281,9 @@ const browser = spawn(
     '--disable-extensions',
     '--disable-background-networking',
     '--disable-component-update',
+    // A published page is fetched over the network like any other, so the
+    // browser must be allowed to reach it; nothing else here opens a
+    // connection, and every request is recorded and checked below anyway.
     // No first-party requests to anywhere but our own server, so that a
     // request to another origin is the page's doing and nothing else's.
     '--disable-sync',
@@ -285,8 +301,8 @@ function shutdown() {
   if (!keepOpen) {
     browser.kill();
   }
-  server.close();
-  server.closeAllConnections?.();
+  server?.close();
+  server?.closeAllConnections?.();
   try {
     rmSync(profile, { recursive: true, force: true });
   } catch {
@@ -392,7 +408,9 @@ devtools.on((message) => {
 
 console.log(`browser  ${browserPath}`);
 console.log(`origin   ${origin}`);
-console.log(`serving  ${root ?? 'the working tree'}`);
+console.log(
+  `serving  ${remoteOrigin !== null ? 'a published page, over the network' : (root ?? 'the working tree')}`,
+);
 console.log('');
 console.log(
   `${'example'.padEnd(12)} ${'expected'.padEnd(13)} ${'reported'.padEnd(13)} ` +
