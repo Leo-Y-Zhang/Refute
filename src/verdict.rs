@@ -233,8 +233,8 @@ impl fmt::Display for Unsupported {
         match self {
             Self::BinaryProof { line } => write!(
                 f,
-                "proof line {line}: this is a binary proof; refute reads text LRAT. \
-                 Re-run kissat with --no-binary, then drat-trim with -L"
+                "proof line {line}: this is a binary proof; refute reads text DRAT \
+                 and text LRAT. Re-run kissat with --no-binary"
             ),
         }
     }

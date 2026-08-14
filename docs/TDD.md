@@ -1029,7 +1029,7 @@ it in every step of every proof above and never found it.
 |---|---|---|
 | G1 | **The pivot is the lemma's first literal, as written.** Every addition that is not RUP is RAT on it | 348 of 348 |
 | G2 | **The RAT lines are the same lines `drat-trim` calls RAT.** The count of non-RUP additions in the raw proof equals the count of RAT-plus-empty-hint lines in `drat-trim -L`'s output of the same proof, and the candidate count equals its resolvent-block count, on every instance where part 2 measured both | 5x4 20/24, 6x5 30/45, 7x6 72/108, 8x7 126/196, n=21 40/48, n=25 60/72 |
-| G3 | The proof ends with a bare `0` — one empty-clause line, always the last | 9 of 9 |
+| G3 | The proof contains a bare `0`. In every real proof measured it is the last line — **but that does not hold in general**, and the rule the checker relies on is the weaker one that does: the *first* empty clause ends the run, and nothing after it is read | 9 of 9 measured; falsified on 2026-08-14 by differential fuzz case 92 of seed 20260814, where `kissat` wrote two further additions after the empty clause |
 | G4 | The empty clause is RUP where it stands. Nothing else could justify it: it has no pivot | 9 of 9 |
 | G5 | **Duplicate live clauses occur.** The same clause is added while a copy is live, so deletion must remove exactly one | 39 on the a(4) rung, 4 on 8x7, 3 on random 80/370; largest multiplicity 3 |
 | G6 | No deletion names a clause that is not live | 0 of 33,000-odd |
@@ -1555,19 +1555,23 @@ Mandatory. For each rule: the change to make in the source, and the test that
 must fail when it is made. A rule with no test that dies is an untested rule,
 and the fixture for it is written in the same step, not later.
 
-| Rule | Source mutation | Test that must die |
-|---|---|---|
-| The trail is unwound to `base` between candidates | delete `unwind(base)` | D9 |
-| Every candidate is checked | `break` out of the candidate loop after the first | D2 |
-| Candidates that are trivially refuted still count | skip a candidate whose resolvent is refuted by its own negation | D2 |
-| Candidates come from the live database only | include clauses marked deleted | D5 |
-| A deletion removes exactly one copy | remove every identifier under the key | D10 |
-| The empty clause must be RUP | accept a bare `0` without propagating | D8 |
-| EOF without an empty clause is a rejection | return the verdict of the last step at EOF | D7 |
-| The lemma's negation is fully assumed | assume one fewer literal | P14 (false rejection; recorded as the direction it fails in) |
-| Unit clauses propagate | drop the `units` enqueue | P13 (false rejection) |
-| Detection routes by grammar | force `Format::Drat` | B32, B33 |
-| The binary sniff does not swallow a leading `d` line | restore part 2's rule | B28 |
+| Rule | Source mutation | Test that must die | **Measured 2026-08-14** |
+|---|---|---|---|
+| The trail is unwound to `base` between candidates | delete `unwind(base)` | D9 | D9, D10 |
+| Every candidate is checked | `break` out of the candidate loop after the first | D2 | D2, D9, D10, P14, P15 |
+| Candidates that are trivially refuted still count | drop the `rat_candidates_checked` bump | D2 | **P14, P15 only.** The prediction was wrong, and so was its framing: skipping a trivially refuted candidate does not change a verdict, only a counter, so this row is not a safety control and the exact-counter assertions on the two positives are the whole of it |
+| Candidates come from the live database only | stop maintaining `occ` on delete | D5 | D5, D1, D2, two store unit tests. A second mutation — make `delete` a no-op — kills twelve, including B25 |
+| A deletion removes exactly one copy | let the store hold only one clause per literal set | D10 | D10, P15, one store unit test. **P15 dying is evidence for G5 on a committed fixture**: the raw 7x6 proof really does duplicate a live clause |
+| The empty clause must be RUP | accept a bare `0` without propagating | D8 | **B25, and P13–P17.** D8 survives, because that proof fails at a RAT step long before its empty clause. B25 is the real kill and it is a false accept: the mutant verifies a formula with a model. P13–P17 die on `rup + rat + tautological == additions`, which is the identity earning its place |
+| EOF without an empty clause is a rejection | return the verdict of the last step at EOF | D7 | D6, D7, **and the trust boundary**, which counted a third witness site. The guard fired at a mutation it was not written for |
+| The lemma's negation is fully assumed | assume one fewer literal | P14 (false rejection; recorded as the direction it fails in) | ten tests, including D1, D2, D5, D6, D7 and D8 — so it is *not* purely a false-rejection mutation, and the row understated it |
+| Unit clauses propagate | drop the `units` enqueue | P13 (false rejection) | fourteen tests, including B24, B27, B29, B35 and a store unit test |
+| Detection routes by grammar | force `Format::Drat` | B32, B33 | 61 tests |
+| The binary sniff does not swallow a leading `d` line | restore part 2's rule | B28 | B28, B24, B25, D10, two `format` unit tests |
+
+**No mutation survived.** Twelve applied, twelve killed, and the three rows
+whose predicted victim was wrong are corrected above rather than quietly
+re-aimed.
 
 Two of those mutations fail in the *false rejection* direction, and the table
 says so. A control that only ever fires in that direction is a weaker control,
