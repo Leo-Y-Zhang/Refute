@@ -128,6 +128,20 @@ pub(crate) struct Store {
     assign: Vec<u8>,
     trail: Vec<Lit>,
     max_var: u32,
+    /// Literals of live clauses, and of dead ones the arena still holds.
+    ///
+    /// Maintained on every add and delete rather than derived, because they
+    /// are the compaction trigger and a trigger that walked the metadata
+    /// array would be O(clauses ever added) per deletion. [`Store::footprint`]
+    /// walks it anyway, once, at the end of a run, and a unit test asserts the
+    /// two agree — the maintained pair is the fast answer, not the true one.
+    live_lits: usize,
+    dead_lits: usize,
+    /// The floor from [`Limits::max_dead_arena_lits`], copied in at load.
+    ///
+    /// Held here because `delete` is where the trigger fires and `delete` has
+    /// no other reason to know about limits.
+    max_dead_arena_lits: usize,
     /// The counters, kept here because this is where nearly everything worth
     /// counting happens.
     pub(crate) stats: Stats,
@@ -150,6 +164,9 @@ impl Store {
             assign: Vec::new(),
             trail: Vec::new(),
             max_var: 0,
+            live_lits: 0,
+            dead_lits: 0,
+            max_dead_arena_lits: limits.max_dead_arena_lits,
             stats: Stats::default(),
         };
         // Sized from the largest variable the formula actually mentions, never
@@ -212,6 +229,7 @@ impl Store {
         });
         let id = u32::try_from(self.clauses.len()).unwrap_or(u32::MAX);
         self.live = self.live.saturating_add(1);
+        self.live_lits = self.live_lits.saturating_add(stored.len());
         self.stats.peak_live_clauses = self.stats.peak_live_clauses.max(self.live);
 
         for lit in &stored {
@@ -276,6 +294,8 @@ impl Store {
         }
         meta.live = false;
         self.live = self.live.saturating_sub(1);
+        self.live_lits = self.live_lits.saturating_sub(key.len());
+        self.dead_lits = self.dead_lits.saturating_add(key.len());
 
         for lit in &key {
             let occ_code = code(*lit);
@@ -304,7 +324,77 @@ impl Store {
                 }
             }
         }
+        // The only call site, and the reason the trail is empty here: deletion
+        // happens between steps, and every step unwinds itself completely.
+        // `assignments == assignments_undone` already asserts that on every
+        // positive fixture, so the identity stops being a nicety and becomes
+        // the precondition this depends on.
+        //
+        // Both halves of the trigger matter. The ratio alone would copy a
+        // four-literal arena the first time a proof deleted its second clause;
+        // the floor alone would never fire on a proof that keeps everything it
+        // adds and deletes a little.
+        if self.dead_lits > self.live_lits && self.dead_lits > self.max_dead_arena_lits {
+            self.compact();
+        }
         true
+    }
+
+    /// Copies the live clauses' literals into a fresh arena, in identifier
+    /// order, and rewrites every live clause's start.
+    ///
+    /// **Identifiers do not move.** Only `ClauseMeta::start` is rewritten, so
+    /// every rejection names the clause it named before, `next_id` still
+    /// counts every clause ever added, and the LRAT numbering a reader knows
+    /// is unchanged. That is what makes this invisible from outside and the
+    /// reason 128 tests were required to stay green across it rather than be
+    /// re-baselined.
+    ///
+    /// Three things are load-bearing beyond that:
+    ///
+    /// - **The order within a clause is preserved.** The first two literals in
+    ///   the arena are the watched ones, however often `visit` has swapped
+    ///   them. A compaction that sorted, deduplicated or reordered would break
+    ///   the watch invariant silently, on a database that then propagates
+    ///   wrongly for the rest of the run. It copies the slice.
+    /// - **Nothing outside `ClauseMeta::start` refers to the arena.**
+    ///   `watches`, `occ`, `units` and `bykey` all hold identifiers, which is
+    ///   what makes the remap local.
+    /// - **A dead clause's `len` is zeroed.** Not required — a dead clause is
+    ///   already unreachable through every index — but it turns any future
+    ///   stale reference from "reads someone else's literals" into "reads
+    ///   nothing", which is the fail-closed direction.
+    fn compact(&mut self) {
+        let mut fresh = Vec::with_capacity(self.live_lits);
+        for meta in &mut self.clauses {
+            if !meta.live {
+                meta.start = 0;
+                meta.len = 0;
+                continue;
+            }
+            let start = usize::try_from(meta.start).unwrap_or(usize::MAX);
+            let end = start.saturating_add(usize::try_from(meta.len).unwrap_or(0));
+            let landed = u32::try_from(fresh.len()).unwrap_or(u32::MAX);
+            fresh.extend_from_slice(self.lits.get(start..end).unwrap_or(&[]));
+            meta.start = landed;
+        }
+        self.lits = fresh;
+        self.dead_lits = 0;
+
+        // The occurrence index is purged here and nowhere else. Taken out and
+        // put back so that the predicate can read the metadata array while the
+        // lists are being rewritten; the vector itself moves, not its heap.
+        let mut occ = std::mem::take(&mut self.occ);
+        for slot in &mut occ {
+            slot.retain(|id| self.is_live(*id));
+        }
+        self.occ = occ;
+        self.stats.compactions = self.stats.compactions.saturating_add(1);
+    }
+
+    /// Whether the clause an identifier names is still in the database.
+    fn is_live(&self, id: u32) -> bool {
+        matches!(self.clauses.get(index_of(id)), Some(meta) if meta.live)
     }
 
     /// Every live clause holding `-pivot`: the RAT candidate set.
@@ -698,6 +788,21 @@ mod tests {
         Store::new(&cnf, &Limits::default())
     }
 
+    /// The same, with the compaction floor at zero.
+    ///
+    /// The trigger is still a comparison against the live half, so this does
+    /// not compact on every deletion: it compacts as soon as the dead half is
+    /// larger, which on a small formula is a handful of deletions rather than
+    /// the hundreds the default floor of 1,024 literals would need.
+    fn forced(dimacs: &str) -> Store {
+        let limits = Limits {
+            max_dead_arena_lits: 0,
+            ..Limits::default()
+        };
+        let cnf = parse_dimacs(dimacs.as_bytes(), &limits).expect("a formula");
+        Store::new(&cnf, &limits)
+    }
+
     #[test]
     fn originals_take_one_based_identifiers_in_file_order() {
         let store = store("p cnf 2 2\n1 2 0\n-1 -2 0\n");
@@ -757,5 +862,223 @@ mod tests {
             !store.propagate_from_scratch(),
             "the deletion was not honoured"
         );
+    }
+
+    /// S01. A compaction gives every live clause back exactly what it had.
+    ///
+    /// The serious failure mode of this milestone, and the only one nobody
+    /// would notice for months: a remap that is wrong by one gives a step some
+    /// other clause's literals, and there is no file to disagree with it.
+    ///
+    /// Propagation runs first, and that is the point of the test rather than
+    /// scene-setting. `visit` swaps literals inside the arena to keep the
+    /// watched pair in the first two slots, so by the time the snapshot is
+    /// taken the clauses are no longer in the order they were written. A
+    /// compaction that sorted, deduplicated or normalised would pass a test
+    /// that compared against the input and fail this one.
+    #[test]
+    fn s01_compaction_gives_every_live_clause_back_exactly_what_it_had() {
+        let mut store = forced("p cnf 5 5\n1 2 3 0\n-1 2 0\n-2 3 4 0\n-3 4 5 0\n1 -4 5 0\n");
+        store.assign_true(lit(-1));
+        store.propagate(0);
+        store.unwind(0);
+
+        let survivors = [1u32, 5];
+        let before: Vec<Vec<Lit>> = survivors.iter().map(|id| store.clause(*id)).collect();
+        assert_eq!(store.stats.compactions, 0, "nothing has been deleted yet");
+
+        assert!(store.delete(&[lit(-1), lit(2)]));
+        assert!(store.delete(&[lit(-2), lit(3), lit(4)]));
+        assert!(store.delete(&[lit(-3), lit(4), lit(5)]));
+        assert_eq!(
+            store.stats.compactions, 1,
+            "eight dead literals against six live did not trigger a compaction"
+        );
+        assert_eq!(
+            store.lits.len(),
+            6,
+            "the arena still holds the dead clauses' literals"
+        );
+
+        for (id, was) in survivors.iter().zip(before) {
+            assert_eq!(store.clause(*id), was, "clause {id} changed under it");
+        }
+        assert_eq!(store.next_id(), 6, "an identifier moved");
+    }
+
+    /// S02. The deletion index drops a key only when its last copy has gone.
+    ///
+    /// Three copies, deleted one at a time. A prune that fired on the first
+    /// deletion would leave the survivors live and unreachable: their later
+    /// deletions find nothing, the candidate set keeps clauses the proof
+    /// deleted, and a real certificate fails for a reason that looks like
+    /// corruption. The A217058 a(4) rung would fail outright, on 39 additions
+    /// that duplicate a clause already live.
+    #[test]
+    fn s02_a_key_survives_until_its_last_copy_goes() {
+        let mut store = store("p cnf 2 3\n-1 -2 0\n-1 -2 0\n-1 -2 0\n");
+        assert_eq!(store.resolution_candidates(lit(1)).len(), 3);
+        assert!(store.delete(&[lit(-1), lit(-2)]));
+        assert_eq!(
+            store.resolution_candidates(lit(1)).len(),
+            2,
+            "one copy went, and so did the key"
+        );
+        assert!(store.delete(&[lit(-2), lit(-1)]), "order must not matter");
+        assert!(store.delete(&[lit(-1), lit(-2)]), "the last copy");
+        assert!(store.resolution_candidates(lit(1)).is_empty());
+        assert!(
+            !store.delete(&[lit(-1), lit(-2)]),
+            "a fourth deletion found something"
+        );
+    }
+
+    /// B42. The same, at a scale where no two survivors move by the same
+    /// amount, and across more than one compaction.
+    ///
+    /// S01 has two survivors and one compaction, so a remap that rewrote only
+    /// the first live clause's start would have a one-in-two chance of passing
+    /// it. Here 720 clauses are added and 504 deleted, fourteen deleted to six
+    /// kept, in three rounds — because the second compaction runs over an
+    /// arena the first one already rewrote, and that is a different thing to
+    /// get wrong.
+    ///
+    /// The proportion is `rat_pigeonhole`'s, which is 702 additions and 487
+    /// deletions. The rounds are not, and they are here because of a
+    /// measurement: a compaction resets the dead half to zero and the live
+    /// half only shrinks, so one long deletion run triggers **once** however
+    /// long it is. The first version of this test asked for more than five
+    /// compactions across 490 deletions and got one. Three rounds give two.
+    #[test]
+    fn b42_every_live_clause_survives_a_compaction_at_scale() {
+        let mut store = forced("p cnf 3 1\n1 2 3 0\n");
+        let mut survivors: Vec<(u32, Vec<Lit>)> = Vec::new();
+        let mut next_var = 4i32;
+        let mut deleted = 0usize;
+
+        for _round in 0..3 {
+            let mut added: Vec<(u32, Vec<Lit>)> = Vec::new();
+            for _ in 0..240 {
+                let body = vec![
+                    lit(next_var),
+                    lit(next_var.saturating_add(1)),
+                    lit(next_var.saturating_add(2)),
+                ];
+                next_var = next_var.saturating_add(3);
+                let id = store.add(&body);
+                added.push((id, body));
+            }
+            for (step, (id, body)) in added.into_iter().enumerate() {
+                if step % 20 < 14 {
+                    assert!(store.delete(&body), "a deletion found nothing");
+                    deleted = deleted.saturating_add(1);
+                } else {
+                    survivors.push((id, body));
+                }
+            }
+        }
+
+        assert_eq!(deleted, 504, "the deletion pattern moved");
+        assert_eq!(survivors.len(), 216, "the survivor count moved");
+        // Two, measured. The bound is what the test needs — a compaction that
+        // runs over an arena an earlier one rewrote — and not the number,
+        // which moves with the round size and is nobody's contract.
+        assert!(
+            store.stats.compactions >= 2,
+            "{} compactions across three rounds of {deleted} deletions",
+            store.stats.compactions
+        );
+
+        for (id, body) in &survivors {
+            assert_eq!(
+                store.clause(*id),
+                *body,
+                "clause {id} came back with someone else's literals"
+            );
+        }
+        assert_eq!(store.clause(1), vec![lit(1), lit(2), lit(3)], "the formula");
+        assert_eq!(store.next_id(), 722, "an identifier moved");
+    }
+
+    /// `store_bytes` counts the arena, so compacting the arena moves it.
+    ///
+    /// Written because the mutation-kill pass found the rule unpinned: taking
+    /// the arena term out of `footprint` entirely left all 149 tests green,
+    /// including three assertions written to catch exactly that.
+    ///
+    /// They miss it because the arena cannot be told apart from the indexes
+    /// over it by size. The occurrence index holds one 4-byte identifier per
+    /// literal of every clause added, and the arena holds one 4-byte literal,
+    /// so any `>=` against a single reported figure still passes with either
+    /// one of them dropped. Neither `swap_remove` nor `retain` gives capacity
+    /// back, so deleting everything does not separate them either — measured,
+    /// on the first version of this test, which asserted that and passed under
+    /// the mutation.
+    ///
+    /// What does separate them is compaction. It replaces the arena with a
+    /// vector sized to the live literals and leaves every occurrence list's
+    /// capacity exactly where it was, so the same sequence of operations under
+    /// two floors differs in the arena and in nothing else. A `store_bytes`
+    /// that has stopped counting the arena reports the same figure for both.
+    #[test]
+    fn compaction_is_visible_in_the_size_the_store_reports() {
+        // The same 200 additions and 190 deletions, run twice. Duplicates on
+        // purpose: 200 copies of one body share a single key, so the deletion
+        // index is a rounding error here and the arena is not.
+        let held = |floor: usize| -> (usize, u64) {
+            let limits = Limits {
+                max_dead_arena_lits: floor,
+                ..Limits::default()
+            };
+            let cnf = parse_dimacs("p cnf 60 0\n".as_bytes(), &limits).expect("a formula");
+            let mut store = Store::new(&cnf, &limits);
+            let body: Vec<Lit> = (10..60).map(lit).collect();
+            assert_eq!(body.len(), 50);
+            for _ in 0..200 {
+                store.add(&body);
+            }
+            for copy in 0..190 {
+                assert!(store.delete(&body), "deletion {copy} found nothing");
+            }
+            (store.footprint().store_bytes, store.stats.compactions)
+        };
+
+        let (uncompacted, never) = held(usize::MAX);
+        let (compacted, ran) = held(0);
+        assert_eq!(never, 0, "a floor of usize::MAX compacted");
+        assert!(ran > 0, "a floor of zero did not compact");
+        assert!(
+            compacted < uncompacted,
+            "{compacted} bytes after {ran} compactions against {uncompacted} without any"
+        );
+    }
+
+    /// The compaction trigger's inputs are what a walk of the metadata says.
+    ///
+    /// `live_lits` and `dead_lits` are maintained on every add and delete
+    /// because the trigger cannot afford to walk the metadata array on each
+    /// deletion. That makes them a second implementation of a number
+    /// [`Store::footprint`] derives independently, and two implementations of
+    /// one number is exactly where they drift.
+    #[test]
+    fn the_maintained_literal_counts_match_a_walk_of_the_metadata() {
+        let mut store = store("p cnf 4 4\n1 2 3 0\n-1 2 0\n-2 3 4 0\n-3 4 0\n");
+        store.add(&[lit(1), lit(-4)]);
+        assert!(store.delete(&[lit(-1), lit(2)]));
+        assert!(store.delete(&[lit(-3), lit(4)]));
+
+        let footprint = store.footprint();
+        let lit_bytes = size_of::<Lit>();
+        assert_eq!(
+            footprint.live_arena_bytes,
+            store.live_lits.saturating_mul(lit_bytes),
+            "live literals"
+        );
+        assert_eq!(
+            footprint.dead_arena_bytes,
+            store.dead_lits.saturating_mul(lit_bytes),
+            "dead literals"
+        );
+        assert_eq!(store.stats.compactions, 0, "the default floor is 1024");
     }
 }
