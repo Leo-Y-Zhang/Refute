@@ -17,7 +17,11 @@
 //
 // Usage:
 //
-//     node tools/browser_check.mjs [--browser <path>] [--port 8081] [--keep-open]
+//     node tools/browser_check.mjs [--browser <path>] [--port 8081] [--root dist]
+//                                    [--keep-open]
+//
+// With --root it drives the built artefact rather than the working tree, which
+// is the version a reader would actually get.
 //
 // It starts its own static server and its own browser, and stops both.
 
@@ -25,6 +29,8 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { createPageServer } from './page_server.mjs';
 
 const BROWSERS = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -52,6 +58,7 @@ const EXPECTED = [
 
 let browserPath = BROWSERS.find((p) => existsSync(p));
 let port = 8081;
+let root = null;
 let keepOpen = false;
 for (let i = 2; i < process.argv.length; i += 1) {
   const arg = process.argv[i];
@@ -61,6 +68,9 @@ for (let i = 2; i < process.argv.length; i += 1) {
   } else if (arg === '--port') {
     i += 1;
     port = Number(process.argv[i]);
+  } else if (arg === '--root') {
+    i += 1;
+    root = process.argv[i];
   } else if (arg === '--keep-open') {
     keepOpen = true;
   }
@@ -190,20 +200,19 @@ async function until(predicate, { timeoutMs = 60000, everyMs = 100 } = {}) {
 
 const profile = mkdtempSync(join(tmpdir(), 'refute-browser-'));
 
-const server = spawn(
-  process.execPath,
-  ['tools/serve_page.mjs', '--port', String(port)],
-  { stdio: ['ignore', 'pipe', 'inherit'] },
-);
+// In this process, deliberately.
+//
+// This used to spawn `tools/serve_page.mjs` as a child with stderr inherited. A
+// GitHub Actions step does not finish until every inherited pipe closes, so a
+// check that had already decided its answer held the job open until the
+// fifteen-minute timeout killed it — twice. There is no child, no pipe and no
+// handshake now.
 stage = 'starting the static server';
-const serverReady = await Promise.race([
-  new Promise((resolve) => server.stdout.once('data', () => resolve(true))),
-  sleep(20000).then(() => false),
-]);
-if (!serverReady) {
-  console.error(`the static server never came up on port ${port}`);
-  process.exit(1);
-}
+const server = createPageServer({ root });
+await new Promise((resolve, reject) => {
+  server.once('error', reject);
+  server.listen(port, '127.0.0.1', resolve);
+});
 
 const browser = spawn(
   browserPath,
@@ -233,7 +242,8 @@ function shutdown() {
   if (!keepOpen) {
     browser.kill();
   }
-  server.kill();
+  server.close();
+  server.closeAllConnections?.();
   try {
     rmSync(profile, { recursive: true, force: true });
   } catch {
@@ -334,6 +344,7 @@ devtools.on((message) => {
 
 console.log(`browser  ${browserPath}`);
 console.log(`origin   ${origin}`);
+console.log(`serving  ${root ?? 'the working tree'}`);
 console.log('');
 console.log(
   `${'example'.padEnd(12)} ${'expected'.padEnd(13)} ${'reported'.padEnd(13)} ` +

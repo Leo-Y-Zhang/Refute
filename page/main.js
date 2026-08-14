@@ -225,6 +225,24 @@ function renderInternal(detail) {
   dom.verdict.focus();
 }
 
+/** An example that could not be fetched. Not a verdict, and never shown as one. */
+function renderMissing(detail) {
+  panel(
+    [
+      wordLine('Example not available', '!'),
+      el(
+        'p',
+        'detail',
+        'That example could not be loaded, so nothing was checked. This is a ' +
+          'broken link on this page, not a statement about any proof.',
+      ),
+      code(detail),
+    ],
+    'done internal',
+  );
+  dom.verdict.focus();
+}
+
 function renderUnavailable(detail) {
   const link = el('a', null, 'Refute on GitHub');
   link.href = 'https://github.com/Leo-Y-Zhang/Refute';
@@ -380,15 +398,25 @@ function cancel() {
 async function loadExample(example) {
   panel([el('p', 'state', `Loading ${example.label}...`)], 'checking');
   try {
-    const [cnf, proof] = await Promise.all([
-      fetch(`examples/${example.cnf}`).then((r) => r.arrayBuffer()),
-      fetch(`examples/${example.proof}`).then((r) => r.arrayBuffer()),
-    ]);
+    // `response.ok` first, and this is not defensive habit. Without it a 404
+    // hands `arrayBuffer()` the error page's body, the checker reads that as a
+    // formula it cannot parse, and the panel says NOT VERIFIED — a verdict,
+    // about a file that was never fetched. A stale build directory produced
+    // exactly that, and it looked entirely convincing.
+    const [cnf, proof] = await Promise.all(
+      [example.cnf, example.proof].map(async (name) => {
+        const response = await fetch(`examples/${name}`);
+        if (!response.ok) {
+          throw new Error(`examples/${name} gave HTTP ${response.status}`);
+        }
+        return response.arrayBuffer();
+      }),
+    );
     setChosen('cnf', example.cnf, cnf);
     setChosen('proof', example.proof, proof);
     run();
   } catch (error) {
-    renderInternal(`could not load the example: ${String(error)}`);
+    renderMissing(String(error));
   }
 }
 

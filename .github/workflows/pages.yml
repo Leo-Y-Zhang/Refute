@@ -1,0 +1,77 @@
+name: Pages
+
+# Deliberately manual, and that is the whole point of this trigger.
+#
+# Publishing a page that gives verdicts is the one irreversible act in this
+# milestone: a page that reports a verdict the checker did not give discredits
+# every verdict this project has ever produced, and taking it down afterwards
+# does not unsay it. So a merge to `main` does not deploy. Someone decides to,
+# from the Actions tab, having read the checks below.
+#
+# The build job runs the same gate CI runs on every push, against the artefact
+# it is about to upload rather than against the working tree, and the deploy
+# job cannot start unless it passed.
+#
+# Before the first run, GitHub Pages has to be enabled for this repository with
+# "GitHub Actions" as the source. That is a settings change, and it is the
+# owner's.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Pinned to a commit, not a tag: a tag is a moving pointer someone
+      # else controls.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install the pinned toolchain with the wasm32 target
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal \
+            --target wasm32-unknown-unknown
+          rustup default 1.97.1
+          rustc --version
+
+      # The module, and the native checker to compare it against.
+      - run: cargo build --profile release-wasm --target wasm32-unknown-unknown -p refute-wasm
+      - run: cargo build
+
+      # Three exports, no imports.
+      - run: node tools/wasm_shape.mjs
+      # Every committed pair, module against binary. Nothing is published that
+      # disagrees with the checker on a single fixture.
+      - run: node tools/wasm_agreement.mjs
+
+      # Assemble what will actually be served, then check *that* in a browser
+      # rather than a local approximation of it.
+      - run: node tools/build_page.mjs --out dist
+      - run: node tools/browser_check.mjs --root dist
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
