@@ -37,8 +37,11 @@ language, agreeing on the same artefacts, converts a single point of trust into 
       everything, before the checking code existed. Recorded in the commit trail.
 - [ ] No input file — malformed, adversarial, or truncated — causes a panic,
       an unbounded allocation, or a hang.
-- [ ] (M2) 10,000 differential fuzz cases against `drat-trim -f` with zero cases
-      where Refute verifies a proof `drat-trim` rejects. *Narrowed on 2026-08-14
+- [x] (M2) 10,000 differential fuzz cases against `drat-trim -f` with zero cases
+      where Refute verifies a proof `drat-trim` rejects. **Met 2026-08-14, seed
+      20260814: 10,000 cases (2,938 unsatisfiable, 7,062 satisfiable), 30,564
+      comparisons, 0 false accepts, 257 strict wins all on the documented list,
+      39.0 % of mutants still verified by both.** *Narrowed on 2026-08-14
       from "zero unexplained disagreements": a forward checker is legitimately
       stricter than a backward one, and 5 of 24 measured mutants are still valid
       proofs. The milestone-2 section states the full rule.*
@@ -399,9 +402,12 @@ project was started for.
       DRAT grammar, and 0 of 9 DRAT proofs by the LRAT grammar.
 - [ ] Every milestone-1 and milestone-1b test still passes, unchanged. The LRAT
       checker is not touched by this milestone.
-- [ ] A differential fuzz harness runs 10,000 generated instances end to end and
+- [x] A differential fuzz harness runs 10,000 generated instances end to end and
       reports **zero cases where Refute prints `s VERIFIED` on a proof
-      `drat-trim -f` rejects**. That is the only unconditional invariant; see
+      `drat-trim -f` rejects**. Run 2026-08-14 at seed 20260814: 30,564
+      comparisons, **0 false accepts**. The 39.0 % harmless-mutant rate matches
+      the 39.3 % measured at 2,000 cases, so the generator's mix did not drift
+      as the run got longer. That is the only unconditional invariant; see
       "Explicitly out of scope" for why "every mutant is rejected" is not one.
 - [ ] Every new rejection rule has a test, and every one of those tests has been
       **observed failing**: either written before the rule, or — where that is
