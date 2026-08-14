@@ -592,11 +592,16 @@ fn the_drat_counter_line_is_printed_only_for_a_drat_run() {
         "the DRAT counter line was printed for an LRAT run: {:?}",
         lrat.stderr
     );
-    // The bet, made observable on a reader's own proof: 593 index slot
-    // updates against the scan this file would have cost, which is 20 RAT
-    // additions times a database averaging some forty live clauses.
+    // The bet, made observable on a reader's own proof. Re-baselined in
+    // milestone 3 from 593 to 377, deliberately: the counter charged one unit
+    // for each entry cleared on a deletion, and nothing at all for the linear
+    // search that clearing performed over a list holding every live clause
+    // with that literal in it -- which is the cost that actually matters, and
+    // is 31 billion comparisons on the largest proof measured. It now counts
+    // insertions, which are one unit of work each, and the query side is
+    // reported separately as `occurrence entries filtered`.
     assert!(
-        drat.stderr.contains("593 occurrence updates"),
+        drat.stderr.contains("377 occurrence updates"),
         "the occurrence count moved: {:?}",
         drat.stderr
     );

@@ -297,12 +297,24 @@ impl Store {
         self.live_lits = self.live_lits.saturating_sub(key.len());
         self.dead_lits = self.dead_lits.saturating_add(key.len());
 
+        // Not counted. `occurrence_updates` is the design's price for the
+        // index and the trigger for abandoning it, and the price it was
+        // written to report is not the one being paid: it counts one per
+        // literal cleared and says nothing about the linear search each
+        // clearing performs over a list holding every live clause with that
+        // literal in it. Counted directly, that search compares 200,595,972
+        // entries on the A217058 a(4) rung and 31,076,047,076 on the a(7)
+        // rung — to answer 234 and 384 candidate queries respectively.
+        //
+        // A counter whose number is four orders of magnitude below the cost it
+        // is named for is worse than no counter, so it now counts insertions
+        // and only insertions, and the query side is reported separately by
+        // `occurrence_entries_filtered`.
         for lit in &key {
             let occ_code = code(*lit);
             if let Some(slot) = self.occ.get_mut(occ_code) {
                 if let Some(at) = slot.iter().position(|held| *held == id) {
                     slot.swap_remove(at);
-                    self.stats.occurrence_updates = self.stats.occurrence_updates.saturating_add(1);
                 }
             }
         }

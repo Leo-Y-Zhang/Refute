@@ -94,15 +94,27 @@ pub struct Stats {
     pub propagations: u64,
     /// Clauses inspected in watch lists. DRAT only.
     pub watch_visits: u64,
-    /// Occurrence-index slots written or cleared. DRAT only.
+    /// Occurrence-index slots **written**. DRAT only.
     ///
     /// The one performance bet in milestone 2, made countable. Part 2 measured
     /// the same choice and took the scan; part 3 measured it again on raw
     /// proofs and took the index, because `drat-trim`'s LRAT deletes far
     /// harder than the file the solver wrote — 159 live clauses on average
-    /// against 666 for the same instance. The trigger for going back is
-    /// written down: if this ever exceeds RAT additions times mean live
-    /// clauses on a real proof, return to the scan.
+    /// against 666 for the same instance.
+    ///
+    /// It counted clearings too until milestone 3, and that was the mistake
+    /// part 4 found: the number it reported was not the price being paid.
+    /// Clearing an entry performs a linear search over a list holding every
+    /// live clause that contains the literal, and the counter charged one for
+    /// the whole search. Measured directly, the searches compare
+    /// **31,076,047,076** entries on the A217058 a(7) rung to answer 384
+    /// candidate queries — an order of magnitude more work than propagation,
+    /// which is the thing the checker is supposed to be doing.
+    ///
+    /// So the trigger part 3 wrote against this counter had already fired
+    /// without the counter showing it. Deletion no longer touches the index at
+    /// all; the query side is [`Stats::occurrence_entries_filtered`], and the
+    /// trigger is written against that.
     pub occurrence_updates: u64,
     /// Additions accepted because unit propagation reached a conflict. DRAT
     /// only; on the LRAT path the hint walk is the same thing under a name the
