@@ -15,7 +15,7 @@ use crate::limits::Limits;
 use crate::lit::{Clause, ClauseId, Lit};
 use crate::lrat::{Hints, LratReader, ResolventBlock, Step};
 use crate::parse::ParseErrorKind;
-use crate::verdict::{Reason, Rejection, Unsupported, Verdict};
+use crate::verdict::{EmptyClauseDerived, Reason, Rejection, Unsupported, Verdict};
 
 /// Unassigned.
 const UNSET: u8 = 0;
@@ -450,13 +450,15 @@ impl Checker {
         None
     }
 
-    /// The only place in this crate that produces a verdict of `Verified`.
+    /// Builds the witness that this checker derived the empty clause.
     ///
     /// Called from exactly one site, immediately after the step that added the
-    /// empty clause returned `Ok`. `tests/trust_boundary.rs` fails if a second
-    /// site ever appears.
+    /// empty clause returned `Ok`. The witness is the only argument
+    /// [`crate::verdict::verified`] takes, and that function is the only route
+    /// to `Verdict::Verified` in the library.
+    /// `tests/trust_boundary.rs` fails if either count changes.
     fn finish_with_empty_clause(&self) -> Verdict {
-        Verdict::Verified
+        crate::verdict::verified(EmptyClauseDerived(()))
     }
 
     /// Puts the negation of a lemma on the trail.
