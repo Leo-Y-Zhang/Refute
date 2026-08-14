@@ -33,6 +33,13 @@ const VAR_TRUE: u8 = 1;
 ///
 /// Total: a verdict for every input, no panic, no unbounded allocation, and no
 /// read past the first failing step.
+///
+/// "No unbounded allocation" is a claim about the ceiling, not about the
+/// constant. A variable here costs about ninety-six bytes -- an assignment
+/// byte, and a 24-byte slot in each of `watches` and `occ` for each of its two
+/// literals -- so the bound that matters on this path is
+/// [`Limits::max_drat_var`], not [`Limits::max_var`], and both the formula and
+/// the proof are held to it.
 pub(crate) fn check_with_stats<R: BufRead>(
     cnf: &Cnf,
     proof: DratReader<R>,

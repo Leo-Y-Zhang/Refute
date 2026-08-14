@@ -188,6 +188,23 @@ pub fn check_readers_with_format<F: BufRead, P: BufRead>(
     limits: &Limits,
     format: Format,
 ) -> Outcome {
+    // A variable costs about a byte in the LRAT store and about ninety-six in
+    // the DRAT one, so that path parses both files against the tighter
+    // ceiling. It has to be the parser: the store grows to whatever variable
+    // turns up, so clamping the store's initial size bounds nothing, and a
+    // formula naming a huge variable is as cheap to write as a proof line
+    // naming one.
+    let tightened;
+    let limits = match format {
+        Format::Drat => {
+            tightened = Limits {
+                max_var: limits.max_var.min(limits.max_drat_var),
+                ..*limits
+            };
+            &tightened
+        }
+        Format::Lrat => limits,
+    };
     let cnf = match parse_dimacs(formula, limits) {
         Ok(cnf) => cnf,
         Err(err) => {

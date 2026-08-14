@@ -643,3 +643,88 @@ fn d12_a_repeated_literal_is_not_read_as_a_tautology() {
     );
     assert_eq!(rejection.step, Some(2));
 }
+
+/// B36: the DRAT path has its own variable ceiling, and the formula is held to
+/// it as well as the proof.
+///
+/// A variable costs about a byte on the LRAT path and about ninety-six on this
+/// one, because `watches` and `occ` carry a 24-byte slot per literal whether
+/// anything is ever pushed into it or not. Measured: the same 21-byte formula
+/// and a proof line naming variable 2^24 peaked at 20.5 MB through LRAT and
+/// 1,556.5 MB through DRAT. At the shared `max_var` of 2^26 a fourteen-byte
+/// line would buy about six gigabytes, so this path stops at 2^22.
+///
+/// Both files are held to it, because naming a huge variable is exactly as
+/// cheap in a formula as it is in a proof.
+#[test]
+fn b36_the_drat_path_stops_at_its_own_variable_ceiling() {
+    let ceiling = Limits::default().max_drat_var;
+    let over = ceiling + 1;
+    let under = ceiling - 1;
+
+    let named_in_the_proof = inline(
+        "p cnf 1 1
+1 0
+",
+        &format!(
+            "{over} 0
+0
+"
+        ),
+    );
+    assert_var_exceeds_limit(named_in_the_proof, "named in the proof");
+
+    let named_in_the_formula = inline(
+        &format!(
+            "p cnf 1 1
+{over} 0
+"
+        ),
+        "1 0
+0
+",
+    );
+    assert_var_exceeds_limit(named_in_the_formula, "named in the formula");
+
+    // One below the ceiling is still read, so this is a bound and not a
+    // refusal to run.
+    let below = rejection(
+        inline(
+            "p cnf 1 1
+1 0
+",
+            &format!(
+                "{under} 0
+0
+"
+            ),
+        )
+        .verdict,
+    );
+    assert!(
+        !matches!(
+            below.reason,
+            Reason::Parse(refute::ParseError {
+                kind: refute::ParseErrorKind::VarExceedsLimit { .. },
+                ..
+            })
+        ),
+        "below the ceiling: {:?}",
+        below.reason
+    );
+}
+
+fn assert_var_exceeds_limit(outcome: refute::Outcome, what: &str) {
+    let refusal = rejection(outcome.verdict);
+    assert!(
+        matches!(
+            refusal.reason,
+            Reason::Parse(refute::ParseError {
+                kind: refute::ParseErrorKind::VarExceedsLimit { .. },
+                ..
+            })
+        ),
+        "{what}: {:?}",
+        refusal.reason
+    );
+}
