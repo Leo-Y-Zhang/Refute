@@ -39,14 +39,24 @@ fn main() -> ExitCode {
     ExitCode::from(run())
 }
 
-/// Bytes as kilobytes, truncating.
+/// Bytes as kilobytes, truncating, but never `0` for something that is there.
 ///
-/// A method call rather than `/`, because the package denies arithmetic
-/// operators and a literal divisor is not an exception the lint makes. The
-/// truncation is deliberate: the figures this prints are megabytes on the
-/// proofs the counter exists for.
-fn kb(bytes: usize) -> usize {
-    bytes.saturating_div(1024)
+/// The figures this prints are megabytes on the proofs the counter exists for,
+/// so kilobytes is the right unit and truncation costs nothing. On a small
+/// proof it costs something real: `0 KB live arena` on a database that holds
+/// forty clauses reads as "nothing is live", which is the opposite of true.
+/// `<1` says the same thing about the size and nothing untrue about the
+/// contents.
+///
+/// Division is a method call rather than `/` because the package denies
+/// arithmetic operators and a literal divisor is not an exception the lint
+/// makes.
+fn kb(bytes: usize) -> String {
+    match bytes {
+        0 => "0".to_owned(),
+        n if n < 1024 => "<1".to_owned(),
+        n => n.saturating_div(1024).to_string(),
+    }
 }
 
 fn run() -> u8 {

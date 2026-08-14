@@ -198,7 +198,10 @@ EOF
     verdict="$(head -1 "$work/out" 2>/dev/null)"
     additions="$(sed -n 's/^refute: \([0-9]*\) additions.*/\1/p' "$work/out.err" | head -1)"
     live="$(sed -n 's/.*, \([0-9]*\) peak live clauses.*/\1/p' "$work/out.err" | head -1)"
-    held="$(sed -n 's/^refute: \([0-9]*\) KB held.*/\1/p' "$work/out.err" | head -1)"
+    # Not `[0-9]*`: the checker prints `<1` rather than `0` for a store it is
+    # really holding something in, so a digits-only pattern silently drops the
+    # column on any artefact under a kilobyte.
+    held="$(sed -n 's/^refute: \([^ ]*\) KB held.*/\1/p' "$work/out.err" | head -1)"
     if [ "$verdict" != "s VERIFIED" ] || [ "$code" != "0" ]; then
         echo "$name: refute said '${verdict:-nothing}' (exit $code)" >&2
         status=1
