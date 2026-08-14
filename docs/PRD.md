@@ -574,7 +574,14 @@ project was started for.
 
 # Milestone 3 — native CLI for large proofs
 
-**Status:** draft · **Date:** 2026-08-14 · **TDD:** [TDD.md, part 4](TDD.md#part-4--milestone-3-scale-and-memory)
+**Status:** BUILT on `feat/milestone-3`, not merged · **Date:** 2026-08-14 ·
+**TDD:** [TDD.md, part 4](TDD.md#part-4--milestone-3-scale-and-memory)
+
+*Outcome: the a(7) rung checks in **31.2 MB** against a stated 64 MB budget,
+where it took 182.6 MB when this was written, and it takes 51.1 s where it took
+63.9 s — reclaiming memory made it faster, not slower. Every
+"success looks like" box below is ticked with the measurement beside it.
+Question 1 — whether 64 MB is the right number — is still the owner's.*
 
 ## Problem, and the first thing measurement changed about it
 
@@ -630,28 +637,38 @@ alone.
 
 ## Success looks like
 
-- [ ] **A memory budget exists, in writing, with a measured figure beside it.**
+- [x] **A memory budget exists, in writing, with a measured figure beside it.**
       For the a(7) rung: **at most 64 MB peak working set on the raw DRAT and
       at most 16 MB on the LRAT.** Measured, not asserted, by the method the
-      TDD states.
-- [ ] The a(7) rung's raw `.drat` verifies inside that budget, and the same
-      rung's `.lrat` verifies inside its own.
-- [ ] **The store's memory is proportional to the live database and not to the
+      TDD states. *In `docs/TDD.md` part 4 and in the README, with the measured
+      figure in the same table as the budget.*
+- [x] The a(7) rung's raw `.drat` verifies inside that budget, and the same
+      rung's `.lrat` verifies inside its own. *31.2 MB against 64, and 5.5 MB
+      against 16. It was 182.6 MB.*
+- [x] **The store's memory is proportional to the live database and not to the
       proof's length**, and that is asserted by counters in CI rather than by a
       measurement on one machine: at the end of a run no dead clause's key is
       retained, and the dead part of the arena is no larger than the live part.
-- [ ] Every one of milestones 1, 1b and 2 is unchanged in what it accepts and
+      *P21 and B38, on a real certificate, both observed failing first.*
+- [x] Every one of milestones 1, 1b and 2 is unchanged in what it accepts and
       rejects. 128 tests stay green; the three-way verdict is untouched; no new
-      verdict, no new format, no new exit code.
-- [ ] The 10,000-case differential fuzz gate is **re-run and still shows zero
+      verdict, no new format, no new exit code. *With one correction: two
+      rejection messages name a different resolution candidate — same verdict,
+      same reason, same pivot, same candidate set. The candidate loop reports
+      the first failure and the list is now in insertion order rather than in
+      the order `swap_remove` left it. Recorded in the TDD and beside both
+      tests.*
+- [x] The 10,000-case differential fuzz gate is **re-run and still shows zero
       false accepts**, because the clause store this milestone rewrites is the
-      thing that fuzz run was measuring.
-- [ ] Each new rule is pinned by a test observed failing — for a memory rule
+      thing that fuzz run was measuring. *Re-run under `--force-compaction`, so
+      that the new code is entered rather than skipped.*
+- [x] Each new rule is pinned by a test observed failing — for a memory rule
       that means a counter assertion, because a 5x change in memory was measured
-      to leave all 128 existing tests green.
-- [ ] The peak-memory and wall-clock table for the whole rung ladder is
+      to leave all 128 existing tests green. *Eleven mutation rows run and
+      recorded; two killed nothing, one was fixed and one is a stated residual.*
+- [x] The peak-memory and wall-clock table for the whole rung ladder is
       recorded, with the method, so the next milestone can tell a regression
-      from a bigger file.
+      from a bigger file. *`tools/scale.sh`, and the table is in the TDD.*
 
 ## Requirements
 

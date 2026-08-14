@@ -1,25 +1,136 @@
 # Session handoff
 
-**State:** milestones 1, 1b and **2** are on `main` (`0941aa5`), 128 tests
-green, CI green on all five jobs. **Milestone 3 — scale and memory — is
-designed on `design/milestone-3`: documents only, no source change.**
+**State:** milestones 1, 1b and 2 are on `main` (`0941aa5`). **Milestone 3 —
+scale and memory — is BUILT on `feat/milestone-3`**, build order steps 2
+through 13 of `docs/TDD.md` part 4, 151 tests green on stable and on 1.74.0 in
+both profiles. Not merged: merging is the owner's.
 
-*The paragraph that used to stand here said milestone 2 was built but unpushed
-on `feat/milestone-2` with 124 tests. `git log` says it was merged at `0941aa5`
-and `cargo test` reports 128, so the document was corrected rather than the
-memory of it kept. This is the second time this paragraph has been wrong in the
-same direction, which is worth noticing: it is written before the merge and not
-after it.*
+*This paragraph has been wrong twice, in the same direction both times, because
+it gets written before the merge and not after it. So it says what `git log`
+says and nothing else.*
 
 ## Exact next step
 
-**Build milestone 3 from `docs/TDD.md` part 4, build order step 2**, on a branch
-off `design/milestone-3`. The design is measurement-led and the measurements are
-already in the document: the a(7) rung was built, both acceptance artefacts
-already verify at `main`, and the milestone is to state the budget the roadmap
-row assumes and to reclaim the 170 MB of dead clause data the DRAT store holds
-at that size. Nothing below this line is owed; everything below it is the
-milestone-2 record, kept as written.
+**Push the branch, read the five CI jobs, and stop.** That is build order step
+14 and it is the only step left. Merging `feat/milestone-3` into `main` is the
+owner's decision, and two questions below want an answer first — neither blocks
+the merge mechanically, and one of them is the number the README now prints.
+
+## What milestone 3 did, in one line each
+
+The a(7) rung — an 87.5 MB raw DRAT refutation of a published term — took
+**182.6 MB of peak working set to check about 10 MB of live data**. It now
+takes **31.2 MB**, inside a stated 64 MB budget. It is also **12.8 s faster** —
+51.1 s against 63.9 s — which was not the trade anyone expected to get.
+
+- **`Stats` gained six counters** and `--stats` a line, because a memory rule
+  cannot be pinned by a verdict: every store variant the design measured
+  returned the same verdict on every artefact, and a change that moved peak
+  memory by a factor of five left all 128 tests green.
+- **`Limits::max_dead_arena_lits`**, default 1,024, with an undocumented
+  `--max-dead-arena-lits=N` for the fuzz harness. The one field in `Limits`
+  that is not a guard: no input can reach it.
+- **The deletion index drops a key when its last copy goes.** It held one entry
+  per distinct clause the proof *ever* contained — a second copy of the arena,
+  96.5 MB of the 179.8 MB accounted. 179.8 MB to 86.7 MB.
+- **The arena compacts** when its dead half is the larger one. 86.7 to 22.5 MB,
+  and 9.4 s *faster* on the a(7) rung, measured by alternating two binaries on
+  the same file three times each. The design predicted 6 s.
+- **The occurrence index went lazy.** Deletion stopped clearing entries — each
+  clearing was a linear search, 31 billion comparisons on that rung to answer
+  384 queries — and the query filters what it finds. 22.5 to 18.7 MB
+  accounted, 31.2 MB peak, another 4.5 s.
+
+*The two time figures are from separate alternating runs, in different windows,
+so they do not sum to the 12.8 s end to end and are not meant to. What each one
+is evidence for is its own step, which is what the build order asks: 9.4 s is
+compaction against the prune alone, and 4.5 s is the lazy index against
+compaction with the eager one.*
+
+## The three things worth carrying forward
+
+1. **One line decided the lazy index, and it was not in the design.** `retain`
+   does not give capacity back, so the purge left every occurrence list sized
+   to every clause ever added. Without a `shrink_to_fit` the lazy index
+   measured **worse** than the eager one it replaced — 34.1 MB against 31.7 —
+   and the build order's own rule would have dropped it. With it: 31.2 MB, and
+   faster. The rule that saved it is the build order's insistence that step 7
+   be measured separately from step 6.
+2. **Two rejection messages moved**, which the design said would not happen.
+   `D1` names candidate 48 where it named 79, `D5` names 49 where it named 80:
+   same pivot, same reason, same verdict, same candidate set. The loop stops at
+   the first candidate whose resolvent is not implied, and eager deletion
+   `swap_remove`d from the list, so the order was one nobody could state. It is
+   now insertion order, so the candidate named is the lowest-numbered one that
+   fails. An improvement, and still a change; both tests carry the old number.
+3. **The mutation pass found two rules pinned by nothing, and both are fixed.**
+   `B37` was widened to a proof with RAT candidates and no deletions, and now
+   kills a compaction called from inside the candidate loop. `store_bytes`
+   counting the arena took three attempts: the arena and the occurrence index
+   are the same size by construction, so no `>=` against a single reported
+   figure separates them, and the step-6 control that did discriminate stopped
+   working when step 7 taught the purge to shrink. The one that works measures
+   both terms independently from the containers and requires the total to cover
+   both. All three attempts are written up in the TDD, because the two that
+   failed both looked right.
+
+Also worth knowing: the trail-empty precondition the design calls load-bearing
+is **not** a soundness rule in this design. Compacting mid-propagation left
+every verdict correct. It is a cost rule, and the TDD now says so.
+
+## Verified on this machine
+
+- `cargo test --no-fail-fast` — **151 passed, 0 failed**, on stable 1.97.1 and
+  on 1.74.0, in debug and in release. The MSRV leg caught a real break that
+  stable could not see: `size_of` reached the prelude in 1.80.
+- `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all --check` —
+  clean.
+- **`tools/differential.sh --extra <ladder>`** — sixteen instances, four
+  columns each, `drat-trim` and `refute` agreeing on every one. The ladder now
+  runs to the a(7) rung: 87,490,047 bytes of raw DRAT and 117,547,684 of the
+  LRAT `drat-trim -L` derives from it, both `s VERIFIED` by both checkers.
+- **`tools/scale.sh`** — new, and the instrument every figure above comes from.
+  Its `drat-trim -f` column reproduces the design's independently measured
+  141.2 MB peak, which is a figure this milestone cannot have moved, and its
+  additions and peak-live columns reproduce the design's ladder table to the
+  unit on all eight rungs.
+- **`tools/fuzz.py --force-compaction`**, 10,000 cases at seed 20260814, and
+  the rollback section makes this the gate no a(7) claim ships before:
+
+      cases            10000 (2938 unsatisfiable, 7062 satisfiable)
+      comparisons      30564
+      harmless mutants 10768 (39.0% still verified by both)
+      strict wins      257 (all on the documented list)
+      false accepts    0
+
+  A new run, not milestone 2's quoted: the store it exercised has been
+  rewritten three times since. The harmless-mutant rate is 39.0 per cent
+  against milestone 2's 39.3 on a fifth of the cases, which is the check that
+  the mutator has not quietly stopped mutating.
+
+  ⚠ The harness has since gained a coverage counter — it passes `--stats` and
+  reports how many comparisons really compacted, because a proof that deletes
+  nothing cannot reach that code at any floor. Measured at **22.9 per cent**
+  over 40 cases. The gate above ran before that line existed; it changes no
+  verdict, and a second full run with it is in flight.
+
+## Still open, and needing the owner
+
+1. **Is 64 MB the right budget?** PRD milestone-3 question 1, and it is now the
+   number the README prints. It is set by what the a(7) rung needs with
+   headroom, not by a browser; milestone 4's WASM ceiling is the one that will
+   matter. Changing it changes a number in three documents and no code.
+2. **Does the rung ladder become a documented local gate?** PRD milestone-3
+   question 2. `tools/scale.sh` exists and takes a directory, exactly as
+   `differential.sh --extra` does. Nothing above n=21 can be committed — the
+   a(7) rung alone is 87 MB against a 500 KB corpus budget.
+3. **Should `store_bytes` be reported on the LRAT path too?** TDD part 4
+   question 3. Proposed: no, and the `--stats` line stays DRAT-only. One commit
+   either way.
+4. Milestone 2's and 1b's open questions are unchanged and are below.
+
+Nothing below this line is owed; everything below it is the milestone-2 record,
+kept as written.
 
 ## Exact next step (milestone 2, complete)
 

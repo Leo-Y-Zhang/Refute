@@ -187,17 +187,23 @@ what the process holds while it is in the states it already has.
 
 Unchanged. One addition, deliberately undocumented in `--help`:
 
-- `--max-dead-arena-lits <n>` — the arena compaction floor. It exists so
+- `--max-dead-arena-lits=<n>` — the arena compaction floor. It exists so
   `tools/fuzz.py` can set it to 0 and force the new code path on 10,000 small
   proofs that would otherwise never reach it. A reader has no reason to touch
   it, so it is not in the usage line; it is in the TDD and in the harness.
+  *Built as one argument with an `=` rather than two, so the flag loop needs no
+  lookahead. A value that does not parse exits 3, not 1: nothing about the
+  proof was in question, and exit 1 would let a typo in a harness read as a bad
+  certificate — milestone 1's reasoning for the missing-file case.*
 
 ### The one state that changes
 
 **"Checking", the silent state.** Milestone 1's contract is silence until the
 verdict, because the tool gets piped and a progress bar in a pipe is noise. On
-the artefacts this milestone is named after, that silence now lasts **64
-seconds** — and after it, `s VERIFIED`.
+the artefacts this milestone is named after, that silence lasts **51 seconds**
+— and after it, `s VERIFIED`. *Written as 64 at design time, from the figure
+measured before the milestone; the same proof now takes 51.1 s, because
+reclaiming the arena turned out to save time rather than cost it.*
 
 Kept silent, on milestone 1's reasoning rather than by inertia. A progress
 indicator that appears on a terminal and not in a pipe means the program behaves
@@ -211,12 +217,19 @@ scale table in the README, which tells them what a minute buys.
 `--stats` prints two lines today, and a third only when the DRAT checker ran.
 It gains a fourth, on the same condition:
 
+Built, and this is the real block from the a(7) rung rather than a sketch of
+one — every number below came off the run:
+
     refute: 763382 additions, 750578 deletions, 0 hints resolved, 40631 peak
             live clauses, 0 unknown deletions, 70479723 assignments, ...
     refute: 320 RAT additions, 0 vacuous, ...
     refute: 763062 RUP additions, 0 tautological, 384 candidates checked, ...
-    refute: 31872 KB held, 512 KB live arena, 908 KB dead arena, 44 compactions,
+    refute: 18761 KB held, 482 KB live arena, 422 KB dead arena, 44 compactions,
             14638 deletion index entries, 384 occurrence entries filtered
+
+*The projection written here at design time said 31,872 KB held, 512 KB live
+and 908 KB dead. The compactions and the deletion-index and
+occurrence-entry counts were predicted exactly; the byte figures came in lower.*
 
 Same rule as the two performance bets before it: **the budget is made
 observable on the reader's own proof** rather than argued from a table in a

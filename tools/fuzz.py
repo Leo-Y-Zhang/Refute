@@ -189,6 +189,7 @@ class Run:
         self.checked = 0
         self.harmless = 0
         self.strict = 0
+        self.compacted = 0
         self.failures = []
 
     def compare(self, case, kind, cnf, proof):
@@ -197,6 +198,17 @@ class Run:
                                extra=self.args.refute_flags)
         theirs, _ = verdict(self.args.drat_trim, cnf, proof, forward=True)
         self.checked += 1
+        # How much of the run entered the code the flag exists to reach. A
+        # proof that deletes nothing cannot compact whatever the floor is, and
+        # random proofs often delete nothing -- measured, on the harness's own
+        # instance shapes: one 150-deletion refutation compacted once and one
+        # 0-deletion refutation did not. Reporting the fraction is the
+        # difference between a gate and a claim about a gate.
+        for field in stderr.split(","):
+            if field.strip().endswith("compactions"):
+                if field.strip().split()[0] != "0":
+                    self.compacted += 1
+                break
 
         if kind in UNCONDITIONAL:
             if ours:
@@ -243,7 +255,11 @@ def main():
     # 1,024 dead literals almost none of them reach the reclamation code that
     # milestone 3 added -- and a harness that never enters the code it is
     # guarding reports the same summary whether that code works or not.
-    args.refute_flags = ["--max-dead-arena-lits=0"] if args.force_compaction else []
+    # `--stats` rides along so the summary can report how many comparisons
+    # actually compacted. It changes nothing about the verdict; it only makes
+    # the counter line available on stderr, which this harness already reads.
+    args.refute_flags = (["--max-dead-arena-lits=0", "--stats"]
+                         if args.force_compaction else [])
 
     cases = [args.case] if args.case is not None else range(args.cases)
     ran = 0
@@ -321,6 +337,12 @@ def main():
              100.0 * run.harmless / max(1, run.checked - unsat_seen)))
     print("strict wins     %d (refute rejected, drat-trim -f verified, "
           "reason on the documented list)" % run.strict)
+    if args.force_compaction:
+        print("compacted       %d of %d comparisons (%.1f%%) really entered "
+              "the arena compaction; the rest deleted too little to trigger it "
+              "at any floor"
+              % (run.compacted, run.checked,
+                 100.0 * run.compacted / max(1, run.checked)))
     print("false accepts   %d" % len(run.failures))
     for line in run.failures:
         print("  " + line)

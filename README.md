@@ -63,6 +63,21 @@ wrote, with `drat-trim` in the chain neither as checker nor as producer:
 | a(54) = 68 | 7.5 KB | 197 KB | `s VERIFIED` | `s VERIFIED` |
 | a(59) = 72 | 7.8 KB | 173 KB | `s VERIFIED` | `s VERIFIED` |
 
+And the whole published ladder of
+[A217058](https://oeis.org/A217058), raw DRAT and the LRAT `drat-trim -L`
+derives from it, both checkers on both files, all agreeing:
+
+| rung | raw DRAT | LRAT | additions | peak live clauses |
+|---|---:|---:|---:|---:|
+| a(0), n=18 | 4.9 KB | 5.6 KB | 173 | 207 |
+| a(2), n=25 | 111 KB | 257 KB | 2,388 | 1,448 |
+| a(4), n=33 | 2.5 MB | 4.1 MB | 31,195 | 10,400 |
+| a(6), n=40 | 15.6 MB | 22.5 MB | 154,759 | 21,354 |
+| **a(7), n=42** | **87.5 MB** | **117.5 MB** | **763,382** | **40,631** |
+
+The ladder is rebuilt rather than stored — 56 s of solver time — so it is a
+gate that can be re-run, not a number that has to be believed.
+
 **What is still not checked.** Binary proofs. `kissat` writes binary DRAT unless
 told `--no-binary`, and handing one to a text checker is a common mistake, so it
 has its own answer rather than a parse error:
@@ -84,6 +99,33 @@ that path stops at 2^22 variables rather than the shared 2^26. Measured peak
 working set for a proof line naming one large variable: 393 MB just under the
 ceiling, 5 MB just above it. The largest instance in this project's corpus
 declares 1,209 variables.
+
+**There is a memory budget, and it is measured rather than asserted.** For the
+largest artefact this project holds — the raw 87.5 MB DRAT refutation behind
+the a(7) rung of [A217058](https://oeis.org/A217058) — **at most 64 MB of peak
+working set**, and at most 16 MB for the same refutation as LRAT. Measured by
+polling the OS every 5 ms, on a release build:
+
+| artefact | budget | measured |
+|---|---:|---:|
+| a(7) rung, raw `.drat`, 87.5 MB | 64 MB | **31.2 MB**, 51 s |
+| a(7) rung, `.lrat`, 117.5 MB | 16 MB | **5.5 MB**, 2.1 s |
+| `drat-trim -f`, same raw proof | *(not ours)* | 141.2 MB, 34 s |
+
+The store holds the **live** clause database and a fixed 12 bytes per addition
+ever made — never the proof's length. It was not always so: the same proof
+peaked at 182.6 MB before this was measured, of which 170 MB was clauses the
+proof had already deleted. `--stats` reports the figure on your own proof, so
+this is checkable rather than quotable, and `tools/scale.sh` re-measures the
+whole table.
+
+Nothing above is in CI, which has no solver. What *is* in CI is the property
+those numbers are consequences of, asserted as counters on committed fixtures:
+at the end of a run the deletion index holds no more entries than the run's
+peak live clause count, and the dead part of the arena is no larger than the
+live part. Both were written before the code that satisfies them and observed
+failing there — 1,063 index entries against 571 peak live clauses, and 7,596
+dead arena bytes against 7,040 live.
 
 **`s UNSUPPORTED` is not a pass.** It exits 2. A caller grepping for `VERIFIED`
 would also match `NOT VERIFIED`, so test the exit code, never the string alone.
@@ -189,8 +231,10 @@ cargo build --release
 cargo test
 ```
 
-79 tests: 13 proofs that must verify, 24 corruption controls that must not, 26
-boundary cases, 12 on the command line contract, 4 on the trust boundary.
+151 tests: 13 proofs that must verify and 24 corruption controls that must not
+on the LRAT path, 35 on the DRAT path, 26 boundary cases, 16 on what the clause
+store holds, 13 on the command line contract, 5 on the trust boundary, and 19
+unit tests inside the library.
 
 **N1–N12 and R1–R8 were written and run before the rule that catches them
 existed, and observed failing there.** Milestone 1's were run against a
@@ -215,6 +259,39 @@ the escaping test runs a fixture carrying real escape bytes.
 
 Minimum supported Rust is 1.74.0, and CI runs the whole suite on it, so that is
 a measured claim rather than a hopeful one. Linters are pinned to 1.97.1.
+
+### The fuzz gate
+
+The corpus pins one example of each corruption class on every commit.
+`tools/fuzz.py` generates thousands, on formulas nobody chose, and compares
+every verdict against `drat-trim -f`:
+
+```
+KISSAT=... DRAT_TRIM=... REFUTE=... tools/fuzz.py --cases 10000
+```
+
+Most recent run — 10,000 cases at seed 20260814, with the clause store's
+reclamation forced on every deletion:
+
+| | |
+|---|---:|
+| cases | 10,000 — 2,938 unsatisfiable, 7,062 satisfiable |
+| comparisons | 30,564 |
+| mutants that are still valid proofs | 10,768 (39.0 %) |
+| Refute stricter, for a reason on the documented list | 257 |
+| **false accepts** | **0** |
+
+Three classes are unconditional, because for them rejection is a theorem and
+not an observation: a proof with no empty clause, a truncated proof, and a
+**satisfiable** formula. `s VERIFIED` on any of those is a hard failure
+whatever `drat-trim` says, and the run stops there.
+
+The harness deliberately does **not** assert that every mutant is rejected.
+Two in five remain valid proofs — the flipped literal landed in a lemma
+nothing later depends on — and an assertion that they all fail would be red on
+correct behaviour and weakened by whoever hit it first. The rate is reported
+instead, because a rate that suddenly goes to zero means the mutator stopped
+mutating.
 
 ### Regenerating the fixtures
 

@@ -1914,11 +1914,22 @@ ways on purpose, because each catches a different kind of regression.
 **1. Per artefact, measured from outside the process.** Peak working set, 64-bit
 release build, polled every 5 ms:
 
-| artefact | budget | measured today | projected after this milestone |
-|---|---:|---:|---:|
-| a(7) rung, raw `.drat` (87.5 MB) | **64 MB** | 182.6 MB — **fails** | 31.1 MB (experiment E) |
-| a(7) rung, `.lrat` (117.5 MB) | **16 MB** | 5.5 MB — passes | unchanged; the LRAT path is not touched |
-| a(4) rung, raw `.drat` (2.5 MB) | **16 MB** | 14.1 MB — passes, barely | 9.7 MB |
+| artefact | budget | measured at `main` | projected | **measured, built** |
+|---|---:|---:|---:|---:|
+| a(7) rung, raw `.drat` (87.5 MB) | **64 MB** | 182.6 MB — **fails** | 31.1 MB (experiment E) | **31.2 MB — passes**, 51.1 s |
+| a(7) rung, `.lrat` (117.5 MB) | **16 MB** | 5.5 MB — passes | unchanged; the LRAT path is not touched | **5.5 MB — passes**, 2.1 s |
+| a(4) rung, raw `.drat` (2.5 MB) | **16 MB** | 14.1 MB — passes, barely | 9.7 MB | **9.4 MB — passes** |
+
+*The build column is `tools/scale.sh`, same method, same machine, on an idle
+one. Re-measured with the machine busy the a(7) row reads 31.8 MB rather than
+31.2, which is the size of the noise on this figure and is recorded so that a
+later reading inside that band is not mistaken for a regression. The
+projections came from four experiments run on the finished tree and reverted,
+and they were right to within a hundred kilobytes on the artefact the budget is
+stated against — but only after the build found the one line that was missing
+from experiment E; see the lazy-index section. The LRAT row is a control rather
+than an achievement: that path was not touched, and it reads what it read
+before.*
 
 64 MB is chosen as roughly twice what experiment E needs, so that the a(8) rung
 — three to five times larger, and the next thing the author will point at this —
@@ -1994,6 +2005,17 @@ Four things are load-bearing:
   checker calls only between steps, and every step unwinds itself completely.
   `assignments == assignments_undone` already asserts that on every positive
   fixture; this design depends on it, so the identity stops being a nicety.
+
+  *Corrected after the build's mutation pass, which is what this column is for.
+  Compacting with a non-empty trail — the mutation is a `compact()` call at the
+  top of `resolution_candidates` — left every verdict on every fixture correct
+  and killed nothing. It is not a soundness precondition in this design,
+  because compaction touches neither the trail, the assignment nor the watch
+  lists, and the third bullet below is the whole reason. It is a **cost** rule:
+  compaction is O(live literals) and the candidate loop runs once per
+  candidate. `B37` now pins the placement — compaction happens on a deletion
+  and nowhere else — against a proof that has RAT candidates and no
+  deletions.*
 - **The order within a clause is preserved.** The first two literals in the
   arena are the watched ones, however often `visit` has swapped them. A
   compaction that sorted, deduplicated or reordered would silently break the
@@ -2028,6 +2050,28 @@ never removed.
 Measured consequence: with compaction purging the lists, the a(7) rung's queries
 examine **384 list entries in total** — one per candidate — against
 31,076,047,076 comparisons for the eager version.
+
+**Built, and it reported exactly that: 384.** Three other things the build
+found, none of them predicted here:
+
+- **`retain` does not give capacity back**, and with deletion no longer
+  clearing entries that capacity is every clause ever added holding the
+  literal. Without a `shrink_to_fit` in the purge the lazy index measures
+  **worse** than the eager one it replaces — 34.1 MB peak working set against
+  31.7 MB — and the build order's own rule would have dropped it. With the
+  shrink: 31.2 MB, and faster. One line decided the design.
+- **Two rejection messages moved**, which the "identifiers do not move"
+  argument above does not cover, because they are not about identifiers.
+  `D1` names candidate 48 where it named 79 and `D5` names 49 where it named
+  80 — same pivot, same reason, same verdict, same candidate set examined. The
+  loop stops at the first candidate whose resolvent is not implied, so which is
+  named depends on the list's order, and eager deletion `swap_remove`d from it:
+  an entry from the end moves into the gap, and the order is one nobody could
+  state. It is now insertion order, so the candidate named is the
+  lowest-numbered one that fails. That is an improvement and it is still a
+  change; both tests carry the old number and the reason beside the new one.
+- **Dropping the containment check kills nothing**, exactly as the mutation
+  table below predicts by predicting nothing. Belt, confirmed as belt.
 
 **Why not the pure scan (D).** It is simpler, and it was measured faster on the
 vdW ladder — 51.6 s against 54.0 s at the a(7) rung. It is also
@@ -2226,23 +2270,58 @@ must fail when it is made. **The measured column is filled in during the build
 and any wrong prediction is corrected there rather than quietly re-aimed** —
 part 3 got three of eleven wrong and said so.
 
+The design's P19 and P20 land as **P22** and **P23**: P19 through P21 were
+already taken by milestone 2 and by the counter controls, the same renumbering
+the milestone-1b record carries.
+
 | Rule | Source mutation | Test that must die | Measured |
 |---|---|---|---|
-| Compaction preserves each clause's literals and their order | copy `meta.len - 1` literals | B42, P19, P20 | *(build)* |
-| Compaction rewrites `start` for every live clause | rewrite only the first | B42, D13, P19 | *(build)* |
-| Compaction runs only with the trail empty | call it from inside the candidate loop | P19, `assignments == assignments_undone` | *(build)* |
-| The dead arena is bounded | never compact | B38's counter assertion | *(build)* |
-| `bykey` drops only empty entries | drop the entry on any deletion | D15, P21, a store unit test | *(build)* |
-| `bykey` still holds live copies | prune on the first delete of a duplicated clause | D15, and the a(4) rung outright | *(build)* |
-| The occurrence purge keeps live entries | invert the retain predicate | D14, P14, P15 | *(build)* |
-| The query filter keeps entries that contain the pivot | drop the containment check | nothing should die — it is belt, not brace; if something does, the design is wrong about which | *(build)* |
-| The query filter drops dead entries | keep them | D14 or a counter; recorded either way | *(build)* |
-| `store_bytes` counts the arena | report only metadata | B38 | *(build)* |
+| Compaction preserves each clause's literals and their order | copy `meta.len - 1` literals | B42, P22, P23 | **14 tests**, including all three, plus S01, D13, D14, B38, P15, P16, P19, P21 |
+| Compaction rewrites `start` for every live clause | rewrite only the first | B42, D13, S01 | **11 tests**, including all three |
+| Compaction runs only with the trail empty | call it from inside the candidate loop | P19, `assignments == assignments_undone` | **NOTHING**, first time. Every verdict stayed correct — it is a cost rule, not a soundness one; see the correction above. B37 was widened to a RAT-carrying proof with no deletions and now kills it |
+| The dead arena is bounded | never compact | B38's counter assertion | B38, B42, S01, `compaction_is_visible_in_the_size_the_store_reports`, `forced_compaction_actually_compacts` |
+| `bykey` drops only empty entries | drop the entry on any deletion | D15, P21, a store unit test | D15, S02, `a_deletion_removes_exactly_one_of_two_copies`, `compaction_is_visible…`, **and P15 — a real proof failing outright**. P21 did **not** die: pruning early makes the index *smaller* and P21's bound is an upper one |
+| `bykey` still holds live copies | prune on the first delete of a duplicated clause | D15, and the a(4) rung outright | the same mutation as the row above; the "rung outright" prediction landed on P15, a committed fixture |
+| The occurrence purge keeps live entries | invert the retain predicate | D14, P14, P15 | D13 and D14. **P14 and P15 did not die**: they run at the default floor and never compact on that fixture, so there is no purge to break |
+| The query filter keeps entries that contain the pivot | drop the containment check | nothing should die — it is belt, not brace; if something does, the design is wrong about which | **NOTHING.** The one row predicted correctly by predicting nothing |
+| The query filter drops dead entries | keep them | D14 or a counter; recorded either way | **8 tests**: D1, D2, D5, B39, P23 and three store unit tests |
+| `store_bytes` counts the arena | report only metadata | B38 | **NOTHING** on the first two attempts; see below. Now `the_reported_size_covers_the_arena_and_the_occurrence_index` |
+| `store_bytes` counts the occurrence index | drop the `occ` term | *(added during the build)* | the same test |
+| The occurrence purge returns capacity | remove `shrink_to_fit` | *(added during the build)* | **NOTHING**, correctly: it is 3 MB on the a(7) rung's peak and no rule at all |
 
 Two of these are expected to fail in the **false rejection** direction and the
 table will say which, as part 3's does. A row whose mutation kills nothing is a
 finding, not a formality: it means the rule is unpinned, and the fixture for it
 is written in the same step.
+
+**The `store_bytes` row took three attempts and is worth the space**, because
+the two that failed both looked right.
+
+The arena cannot be told apart from the occurrence index by *size*. The index
+holds one 4-byte identifier per literal of every clause added and the arena
+holds one 4-byte literal, so the two terms are equal by construction and any
+`>=` assertion against a single reported figure passes with either one of them
+dropped. That is why `the_drat_store_reports_the_bytes_it_holds` — which does
+assert `live + dead <= store_bytes` — never noticed.
+
+*Attempt two* compared a run that compacted against one that did not, on the
+reasoning that compaction rebuilds the arena at the live size and leaves the
+index alone. It discriminated at build order step 6 and stopped at step 7,
+when the purge learnt to `shrink_to_fit` and both terms started moving
+together. It is kept as
+`compaction_is_visible_in_the_size_the_store_reports`, because "compaction
+changes the size the store reports" is still a real property, but it is no
+longer claimed to pin more than that.
+
+*Attempt three* stops comparing totals. It measures the arena and the index
+**independently, from the containers themselves**, and requires the reported
+figure to cover both — on 200 copies of one 50-literal clause, so that
+duplicates collapse the deletion index and leave those two terms dominant. It
+kills the arena mutation and the matching `occ` mutation, and both were run.
+
+A ratio assertion — "the store holds each literal at least twice" — would also
+have worked and was rejected: it pins an implementation proportion rather than
+a rule, and would go red on the next honest change to either structure.
 
 ### Differential harness and fuzz (not CI)
 
@@ -2253,6 +2332,32 @@ is written in the same step.
   under it. Random proofs are small and delete little, so without the flag the
   new code path is reached by almost none of the 10,000 cases — a harness that
   never enters the code it is guarding is decoration.
+
+  *Built, and the sentence above needed a measurement rather than a belief. The
+  flag does not make every case reach the code and cannot: a proof that deletes
+  nothing has nothing to reclaim at any floor, and `kissat` writes plenty of
+  those on small random instances — measured, on the harness's own shapes, one
+  refutation with 150 deletions compacting once and one with none compacting
+  never. So the harness now **counts** the comparisons whose run reported a
+  non-zero `compactions` and prints the fraction in its summary: **22.9 per
+  cent** over 40 cases. Saying which part of a gate was exercised is the
+  difference between a gate and a claim about one.*
+
+  **The gate, run:**
+
+      refute flags     --max-dead-arena-lits=0
+      cases            10000 (2938 unsatisfiable, 7062 satisfiable)
+      comparisons      30564
+      harmless mutants 10768 (39.0% still verified by both)
+      strict wins      257 (all on the documented list)
+      false accepts    0
+
+  A new run and not milestone 2's, as the rollback section requires: the store
+  it exercises has been rewritten three times since that one. The
+  harmless-mutant rate is 39.0 per cent against milestone 2's 39.3 on a fifth
+  of the cases, which is the check that the mutator has not quietly stopped
+  mutating, and 257 strict wins are all on the documented list — none is a
+  strictness nobody wrote down.
 
 ### The scale harness
 
