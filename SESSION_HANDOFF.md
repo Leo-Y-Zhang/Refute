@@ -1,16 +1,27 @@
 # Session handoff
 
-**State:** milestones 1 and 1b are on `main` (`d9961cb`). Milestone 2 — direct
-DRAT checking — is **built on `feat/milestone-2`**, unpushed, 124 tests green
-on stable and on 1.74.0, in debug and release, `cargo fmt --check` and
-`cargo clippy --all-targets -- -D warnings` clean on the pinned 1.97.1.
-Nothing else is in flight.
+**State:** milestones 1, 1b and **2** are on `main` (`0941aa5`), 128 tests
+green, CI green on all five jobs. **Milestone 3 — scale and memory — is
+designed on `design/milestone-3`: documents only, no source change.**
 
-*The paragraph that used to stand here said milestone 1b was unmerged and that
-`main` was at 4b6bb9e. `git merge-base --is-ancestor feat/milestone-1b main`
-says otherwise, so the document was corrected rather than the memory of it kept.*
+*The paragraph that used to stand here said milestone 2 was built but unpushed
+on `feat/milestone-2` with 124 tests. `git log` says it was merged at `0941aa5`
+and `cargo test` reports 128, so the document was corrected rather than the
+memory of it kept. This is the second time this paragraph has been wrong in the
+same direction, which is worth noticing: it is written before the merge and not
+after it.*
 
 ## Exact next step
+
+**Build milestone 3 from `docs/TDD.md` part 4, build order step 2**, on a branch
+off `design/milestone-3`. The design is measurement-led and the measurements are
+already in the document: the a(7) rung was built, both acceptance artefacts
+already verify at `main`, and the milestone is to state the budget the roadmap
+row assumes and to reclaim the 170 MB of dead clause data the DRAT store holds
+at that size. Nothing below this line is owed; everything below it is the
+milestone-2 record, kept as written.
+
+## Exact next step (milestone 2, complete)
 
 **Run `tools/fuzz.py` to 10,000 cases with zero false accepts, then — and only
 then — rewrite the README's opening.** That order is the rollback section of
