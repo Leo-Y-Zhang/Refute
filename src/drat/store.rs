@@ -243,15 +243,30 @@ impl Store {
     /// spurious one can cause a later rejection and never a false `VERIFIED`.
     pub(crate) fn delete(&mut self, lits: &[Lit]) -> bool {
         let key = normalize(lits);
-        let id = match self.bykey.get_mut(key.as_slice()) {
+        let (id, emptied) = match self.bykey.get_mut(key.as_slice()) {
             // The last copy added, because popping is O(1) and the copies are
             // by definition indistinguishable.
             Some(ids) => match ids.pop() {
-                Some(id) => id,
+                Some(id) => (id, ids.is_empty()),
                 None => return false,
             },
             None => return false,
         };
+        // The prune, and the whole of it. Without this line the map keeps a
+        // boxed copy of the literals of every distinct clause the proof ever
+        // contained — a second arena, and the largest single item in the
+        // store: 96.5 MB of 179.8 MB on the largest proof measured for
+        // `docs/TDD.md` part 4, of which 1.6 MB belonged to a live clause.
+        //
+        // Only when the last copy has gone. Duplicate live clauses are real —
+        // 39 additions of the A217058 a(4) certificate duplicate a clause that
+        // is already live, with a largest multiplicity of three — and dropping
+        // the key while a copy remains loses the survivor's only route back,
+        // so its later deletion finds nothing and the proof fails for a reason
+        // that looks like a corrupt certificate.
+        if emptied {
+            self.bykey.remove(key.as_slice());
+        }
         let meta = match self.clauses.get_mut(index_of(id)) {
             Some(meta) => meta,
             None => return false,
