@@ -30,6 +30,15 @@
 //
 // Exits 0 if every pair agrees and all three verdicts were seen, 1 otherwise.
 
+// Paths in this file are relative to the repository root, so the process moves
+// there first. Running `node tools/<this>.mjs` from a home directory is the
+// obvious thing to try and used to fail with a module-not-found error that
+// named a path nobody had typed.
+import { chdir } from 'node:process';
+import { dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
+chdir(resolvePath(dirname(fileURLToPath(import.meta.url)), '..'));
+
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { basename, join } from 'node:path';
