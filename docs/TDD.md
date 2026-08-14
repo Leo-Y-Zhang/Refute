@@ -2339,9 +2339,13 @@ a rule, and would go red on the next honest change to either structure.
   those on small random instances — measured, on the harness's own shapes, one
   refutation with 150 deletions compacting once and one with none compacting
   never. So the harness now **counts** the comparisons whose run reported a
-  non-zero `compactions` and prints the fraction in its summary: **22.9 per
-  cent** over 40 cases. Saying which part of a gate was exercised is the
-  difference between a gate and a claim about one.*
+  non-zero `compactions` and prints the fraction in its summary. Saying which
+  part of a gate was exercised is the difference between a gate and a claim
+  about one.
+  
+  Measured at **12.6 per cent** — 463 of 3,685 comparisons — on a 1,200-case
+  run at the same seed. A 40-case sample taken first said 22.9 per cent, which
+  is what a 40-case sample is worth; the smaller figure is the one to quote.*
 
   **The gate, run:**
 

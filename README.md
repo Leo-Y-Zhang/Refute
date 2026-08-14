@@ -267,11 +267,21 @@ The corpus pins one example of each corruption class on every commit.
 every verdict against `drat-trim -f`:
 
 ```
-KISSAT=... DRAT_TRIM=... REFUTE=... tools/fuzz.py --cases 10000
+KISSAT=... DRAT_TRIM=... REFUTE=... tools/fuzz.py --cases 10000 \
+    --force-compaction
 ```
 
-Most recent run — 10,000 cases at seed 20260814, with the clause store's
-reclamation forced on every deletion:
+`--force-compaction` drops the clause store's compaction floor to zero, so the
+arena is reclaimed as soon as its dead half is the larger one rather than
+after a thousand dead literals. Random proofs are small and delete little, so
+without it most of these cases never enter that code at all — and a harness
+that does not enter the code it is guarding is decoration. It does not make
+*every* case reach it either: a proof that deletes nothing has nothing to
+reclaim at any floor, so the summary reports what fraction really compacted.
+Measured at **12.6 %** — 463 of 3,685 comparisons — on a separate 1,200-case
+run, since the counter was written after the gate below had started.
+
+Most recent run — 10,000 cases at seed 20260814:
 
 | | |
 |---|---:|

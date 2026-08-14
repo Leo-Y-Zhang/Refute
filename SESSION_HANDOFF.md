@@ -108,11 +108,21 @@ every verdict correct. It is a cost rule, and the TDD now says so.
   against milestone 2's 39.3 on a fifth of the cases, which is the check that
   the mutator has not quietly stopped mutating.
 
-  ⚠ The harness has since gained a coverage counter — it passes `--stats` and
+  The harness has since gained a coverage counter — it passes `--stats` and
   reports how many comparisons really compacted, because a proof that deletes
-  nothing cannot reach that code at any floor. Measured at **22.9 per cent**
-  over 40 cases. The gate above ran before that line existed; it changes no
-  verdict, and a second full run with it is in flight.
+  nothing cannot reach that code at any floor. The gate above ran before that
+  line existed, so the coverage was measured on its own run at the same seed:
+
+      cases            1200 (355 unsatisfiable, 845 satisfiable)
+      comparisons      3685
+      harmless mutants 1316 (39.5%)
+      compacted        463 of 3685 (12.6%) really entered the compaction
+      false accepts    0
+
+  ⚠ A 40-case sample taken first said 22.9 per cent, which is what a 40-case
+  sample is worth. **12.6 per cent is the figure to quote**; three documents
+  briefly carried the larger one and were corrected. The counter changes no
+  verdict — it only lets the summary say what it exercised.
 
 ## Still open, and needing the owner
 
