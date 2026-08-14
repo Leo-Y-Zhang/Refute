@@ -36,6 +36,25 @@ import { basename, join } from 'node:path';
 
 const VERDICTS = ['VERIFIED', 'NOT VERIFIED', 'UNSUPPORTED'];
 
+/**
+ * The module's fourth return code, which is not a verdict.
+ *
+ * Named here so that a pair which ever produced it disagrees with the native
+ * checker loudly, rather than being printed as though the checker had said it.
+ */
+const REFUSED_CODE = 3;
+
+/**
+ * The ceiling the module refuses above, in bytes.
+ *
+ * The source of truth is `MAX_INPUT_BYTES` in wasm/src/lib.rs; this is the
+ * value the page will also have to carry, because the refusal it makes happens
+ * before the module is instantiated and so cannot ask the module. The boundary
+ * check below is what keeps the two from drifting: it asserts that the module
+ * accepts exactly this and refuses exactly one byte more.
+ */
+const MAX_INPUT_BYTES = 33_554_432;
+
 function parseArgs(argv) {
   const options = {
     module: 'target/wasm32-unknown-unknown/release-wasm/refute_wasm.wasm',
@@ -205,7 +224,10 @@ function wasmVerdict(moduleBytes, cnf, proof) {
     return { verdict: `TRAPPED (${err.message})`, peak: NaN, seconds: NaN };
   }
   const seconds = Number(process.hrtime.bigint() - started) / 1e9;
-  const verdict = VERDICTS[code];
+  // REFUSED is named rather than mapped to a verdict, so that a pair which
+  // somehow produced it disagrees with the native checker instead of being
+  // printed as though the checker had said it.
+  const verdict = code === REFUSED_CODE ? 'REFUSED' : VERDICTS[code];
   return {
     verdict: verdict ?? `UNKNOWN CODE ${code}`,
     // `memory.grow` has no inverse, so this is the high-water mark of the whole
@@ -310,6 +332,79 @@ for (const verdict of VERDICTS) {
         'verdicts or agreement means less than it looks like it does',
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// W5, the size refusal, in the environment it exists for.
+//
+// The native checker has no such ceiling, so there is nothing here to compare
+// against and this is an assertion rather than an agreement. It runs in wasm
+// rather than only in the Rust unit tests because the failure it prevents is a
+// browser one: a tab that dies with no explanation instead of a page that says
+// what happened.
+
+function boundary() {
+  const results = [];
+
+  const overInstance = new WebAssembly.Instance(
+    new WebAssembly.Module(moduleBytes),
+    {},
+  );
+  const over = overInstance.exports;
+  const overOffset = over.proof_reserve(MAX_INPUT_BYTES + 1);
+  let overCode;
+  try {
+    overCode = over.check();
+  } catch (err) {
+    failures.push(`one byte over the ceiling trapped instead of refusing: ${err.message}`);
+    overCode = null;
+  }
+  if (overOffset !== 0) {
+    failures.push(
+      `proof_reserve(MAX_INPUT_BYTES + 1) returned offset ${overOffset}; ` +
+        'a refusal must be offset 0, or the page cannot tell one from a place ' +
+        'to write',
+    );
+  }
+  if (overCode !== null && overCode !== REFUSED_CODE) {
+    failures.push(
+      `one byte over the ceiling returned ${overCode}, not ${REFUSED_CODE}; ` +
+        'the module reported a verdict on a file it never held',
+    );
+  }
+  results.push(
+    `one byte over  offset ${overOffset}, check ${overCode} ` +
+      `(peak ${(over.memory.buffer.byteLength / (1024 * 1024)).toFixed(1)} MB, ` +
+      'nothing allocated for the refused input)',
+  );
+
+  // And the ceiling itself, on its own instance: a boundary written `>=`
+  // instead of `>` refuses a file the module can hold, and no agreement test
+  // in this harness would ever notice.
+  const atInstance = new WebAssembly.Instance(
+    new WebAssembly.Module(moduleBytes),
+    {},
+  );
+  const at = atInstance.exports;
+  const atOffset = at.proof_reserve(MAX_INPUT_BYTES);
+  if (atOffset === 0) {
+    failures.push(
+      `proof_reserve(MAX_INPUT_BYTES) was refused; the ceiling itself must be ` +
+        'accepted, or wasm/src/lib.rs and this harness disagree about where it is',
+    );
+  }
+  results.push(
+    `at the ceiling  offset ${atOffset}, ` +
+      `peak ${(at.memory.buffer.byteLength / (1024 * 1024)).toFixed(1)} MB`,
+  );
+
+  return results;
+}
+
+console.log('');
+console.log(`ceiling         ${MAX_INPUT_BYTES} bytes per input`);
+for (const line of boundary()) {
+  console.log(`  ${line}`);
 }
 
 console.log('');

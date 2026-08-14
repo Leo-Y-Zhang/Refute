@@ -41,29 +41,86 @@ pub const VERIFIED: u32 = 0;
 pub const NOT_VERIFIED: u32 = 1;
 /// The proof uses a construct this checker does not check. Not a pass.
 pub const UNSUPPORTED: u32 = 2;
+/// An input was larger than this module will hold. Not a verdict.
+pub const REFUSED: u32 = 3;
+
+/// The largest formula or proof this module will hold: 32 MiB.
+///
+/// Peak linear memory is roughly the proof plus the formula plus the store plus
+/// a megabyte, and the proof is the larger term on every rung measured above
+/// the smallest. 32 MiB of proof puts peak at about 48 MB, which is
+/// comfortable in a desktop tab and honest on a phone.
+///
+/// It is not a claim about `WebAssembly.Memory` maxima, which differ per
+/// browser, per platform and per amount of free RAM, and which this project has
+/// not measured on a phone. It is set from this project's own ladder and
+/// deliberately far below any published engine limit, so that the module is
+/// wrong in the direction of refusing something it could have checked.
+///
+/// **It applies to the formula as well as to the proof**, where `docs/TDD.md`
+/// part 5 states the refusal on proof size alone. The budget it states names
+/// both terms, there are two files, and a user who drops a 500 MB formula with
+/// a one-line proof would otherwise reach the ceiling by dying at it. Refusing
+/// one more thing than the design asked for is the safe direction; accepting
+/// one more is not.
+pub const MAX_INPUT_BYTES: usize = 33_554_432;
+
+/// The offset a refused reserve returns.
+///
+/// Zero is unambiguous: a live `Vec<u8>` never has address zero, and an empty
+/// one is dangling-but-aligned at 1 rather than null.
+/// `a_zero_length_reserve_still_returns_a_usable_offset` is the test that keeps
+/// that true, because the whole refusal contract rests on it.
+const REFUSED_OFFSET: usize = 0;
+
+/// One of the two inputs, and whether it was refused.
+///
+/// The flag travels with the buffer rather than in a third `thread_local`, so
+/// that a good formula cannot clear a refused proof's flag by being reserved
+/// after it.
+#[derive(Default)]
+struct Input {
+    /// What JavaScript writes into, sized by a reserve call.
+    bytes: Vec<u8>,
+    /// Set when the last reserve for this input was over the ceiling.
+    refused: bool,
+}
 
 thread_local! {
     /// The formula, written by JavaScript at the offset [`cnf_reserve`] returns.
-    static FORMULA: Cell<Vec<u8>> = const { Cell::new(Vec::new()) };
+    static FORMULA: Cell<Input> = const { Cell::new(Input { bytes: Vec::new(), refused: false }) };
     /// The proof, written by JavaScript at the offset [`proof_reserve`] returns.
-    static PROOF: Cell<Vec<u8>> = const { Cell::new(Vec::new()) };
+    static PROOF: Cell<Input> = const { Cell::new(Input { bytes: Vec::new(), refused: false }) };
 }
 
-/// Sizes one buffer and returns the offset JavaScript should write at.
+/// Sizes one buffer and returns the offset JavaScript should write at, or
+/// [`REFUSED_OFFSET`] if `len` is over [`MAX_INPUT_BYTES`].
 ///
 /// [`Cell::take`] and [`Cell::set`] rather than a `RefCell`: a `RefCell` borrow
 /// panics if it overlaps another, and a panic here is a trap, and a trap is a
 /// blank page. Moving the `Vec` out and back cannot fail and does not move the
 /// heap allocation the returned offset points at.
-fn reserve(slot: &'static LocalKey<Cell<Vec<u8>>>, len: usize) -> usize {
+///
+/// A refusal frees the buffer rather than keeping one nobody may write to, and
+/// it clears the previous contents either way. The alternative — leaving the
+/// last input in place — would let a refused reserve be followed by a `check()`
+/// that quietly re-checked something the user had replaced.
+fn reserve(slot: &'static LocalKey<Cell<Input>>, len: usize) -> usize {
     slot.with(|cell| {
-        let mut buffer = cell.take();
-        buffer.clear();
-        buffer.resize(len, 0);
+        let mut input = cell.take();
+        input.bytes.clear();
+        if len > MAX_INPUT_BYTES {
+            input.refused = true;
+            input.bytes.shrink_to_fit();
+            cell.set(input);
+            return REFUSED_OFFSET;
+        }
+        input.refused = false;
+        input.bytes.resize(len, 0);
         // Safe: casting a pointer to an integer only reads its address. The
         // dereference happens in JavaScript, against the same linear memory.
-        let offset = buffer.as_ptr() as usize;
-        cell.set(buffer);
+        let offset = input.bytes.as_ptr() as usize;
+        cell.set(input);
         offset
     })
 }
@@ -71,7 +128,9 @@ fn reserve(slot: &'static LocalKey<Cell<Vec<u8>>>, len: usize) -> usize {
 /// Reserves `len` bytes for the formula and returns the offset to write at.
 ///
 /// Read `instance.exports.memory.buffer` **after** this call, never before:
-/// see the glue contract in the crate documentation.
+/// see the glue contract in the crate documentation. A return of `0` is a
+/// refusal, not an offset: write nothing and call [`check`], which will return
+/// [`REFUSED`].
 // `#[no_mangle]` is `unsafe_code` to the lint, and without it this function has
 // no exported symbol. Allowed here rather than in the manifest so that the
 // exception is one item wide and visible in a diff.
@@ -84,7 +143,9 @@ pub extern "C" fn cnf_reserve(len: usize) -> usize {
 /// Reserves `len` bytes for the proof and returns the offset to write at.
 ///
 /// Read `instance.exports.memory.buffer` **after** this call, never before:
-/// see the glue contract in the crate documentation.
+/// see the glue contract in the crate documentation. A return of `0` is a
+/// refusal, not an offset: write nothing and call [`check`], which will return
+/// [`REFUSED`].
 #[allow(unsafe_code)]
 #[no_mangle]
 pub extern "C" fn proof_reserve(len: usize) -> usize {
@@ -98,6 +159,10 @@ pub extern "C" fn proof_reserve(len: usize) -> usize {
 /// same route the CLI's do. A page that reports a verdict correctly and says
 /// nothing else is useful; a page that reports one *incorrectly* is worse than
 /// no page at all, so the verdict ships first and alone.
+///
+/// [`REFUSED`] if either input was over [`MAX_INPUT_BYTES`] when it was
+/// reserved. That is not a fourth verdict and must never be shown as one: it
+/// says this module declined to hold the file, and the CLI has no such ceiling.
 ///
 /// The buffers are put back, so calling this twice on one instance checks the
 /// same input twice and gives the same answer. That is a deliberate choice
@@ -113,21 +178,31 @@ pub extern "C" fn check() -> u32 {
             let formula = formula_cell.take();
             let proof = proof_cell.take();
 
-            // The same entry point the CLI uses, under the same default limits.
-            // "A formula we cannot read is a proof we cannot accept" lives
-            // inside it rather than here, which is what makes the module's
-            // verdict the checker's verdict rather than a second opinion about
-            // it.
-            let outcome =
-                refute::check_readers(formula.as_slice(), proof.as_slice(), &Limits::default());
+            // Before anything is read. A refused input has no bytes, and
+            // checking an empty formula against an empty proof would report
+            // NOT VERIFIED — a verdict, about a file this module never held.
+            let code = if formula.refused || proof.refused {
+                REFUSED
+            } else {
+                // The same entry point the CLI uses, under the same default
+                // limits. "A formula we cannot read is a proof we cannot
+                // accept" lives inside it rather than here, which is what makes
+                // the module's verdict the checker's verdict rather than a
+                // second opinion about it.
+                let outcome = refute::check_readers(
+                    formula.bytes.as_slice(),
+                    proof.bytes.as_slice(),
+                    &Limits::default(),
+                );
 
-            // Exhaustive, and asserted so from the checker crate's test suite.
-            // A wildcard arm here is the one defect that would let this module
-            // report a verdict the checker never gave.
-            let code = match outcome.verdict {
-                Verdict::Verified => VERIFIED,
-                Verdict::NotVerified(_) => NOT_VERIFIED,
-                Verdict::Unsupported(_) => UNSUPPORTED,
+                // Exhaustive, and asserted so from the checker crate's test
+                // suite. A wildcard arm here is the one defect that would let
+                // this module report a verdict the checker never gave.
+                match outcome.verdict {
+                    Verdict::Verified => VERIFIED,
+                    Verdict::NotVerified(_) => NOT_VERIFIED,
+                    Verdict::Unsupported(_) => UNSUPPORTED,
+                }
             };
 
             formula_cell.set(formula);
@@ -149,20 +224,23 @@ mod tests {
         clippy::panic
     )]
 
-    use super::{check, cnf_reserve, proof_reserve, NOT_VERIFIED, UNSUPPORTED, VERIFIED};
+    use super::{
+        check, cnf_reserve, proof_reserve, Input, MAX_INPUT_BYTES, NOT_VERIFIED, REFUSED,
+        REFUSED_OFFSET, UNSUPPORTED, VERIFIED,
+    };
 
-    /// Writes `bytes` into the buffer at `offset`, the way the glue does.
+    /// Writes `bytes` into the buffer the way the glue does.
     ///
     /// The host build has no linear memory to index, so this reaches the same
     /// `Vec` through the same `thread_local` instead. What it exercises is the
     /// contract — reserve, write, check — and not the JavaScript side of it,
     /// which is the Node harness's job.
-    fn write(slot: &'static std::thread::LocalKey<std::cell::Cell<Vec<u8>>>, bytes: &[u8]) {
+    fn write(slot: &'static std::thread::LocalKey<std::cell::Cell<Input>>, bytes: &[u8]) {
         slot.with(|cell| {
-            let mut buffer = cell.take();
-            buffer.clear();
-            buffer.extend_from_slice(bytes);
-            cell.set(buffer);
+            let mut input = cell.take();
+            input.bytes.clear();
+            input.bytes.extend_from_slice(bytes);
+            cell.set(input);
         });
     }
 
@@ -209,9 +287,9 @@ mod tests {
         let _ = proof_reserve(0);
         assert_eq!(
             super::FORMULA.with(|cell| {
-                let buffer = cell.take();
-                let seen = buffer.as_ptr() as usize;
-                cell.set(buffer);
+                let input = cell.take();
+                let seen = input.bytes.as_ptr() as usize;
+                cell.set(input);
                 seen
             }),
             offset,
@@ -226,6 +304,69 @@ mod tests {
         // caller could distinguish from a real one.
         load(TINY_CNF, TINY_PROOF);
         assert_eq!(check(), VERIFIED);
+        assert_eq!(check(), VERIFIED);
+    }
+
+    // ---------------------------------------------------------------------
+    // The size refusal. W5 of the test plan, plus the assumption it rests on.
+
+    /// The sentinel the whole refusal contract depends on.
+    ///
+    /// If a legitimate reserve could ever return zero, the glue could not tell
+    /// a refusal from an offset, and a page would write the user's proof over
+    /// the bottom of linear memory. An empty `Vec<u8>` is dangling-but-aligned
+    /// at 1, not null, and this is the test that says so out loud.
+    #[test]
+    fn a_zero_length_reserve_still_returns_a_usable_offset() {
+        assert_ne!(cnf_reserve(0), REFUSED_OFFSET);
+        assert_ne!(proof_reserve(0), REFUSED_OFFSET);
+    }
+
+    #[test]
+    fn a_proof_one_byte_over_the_ceiling_is_refused() {
+        let _ = cnf_reserve(TINY_CNF.len());
+        write(&super::FORMULA, TINY_CNF);
+        // No allocation happens, which is the point: the refusal is a decision
+        // taken with the length in hand, not a failure discovered by trying.
+        assert_eq!(proof_reserve(MAX_INPUT_BYTES + 1), REFUSED_OFFSET);
+        assert_eq!(check(), REFUSED);
+    }
+
+    #[test]
+    fn a_formula_one_byte_over_the_ceiling_is_refused_too() {
+        // The design states the refusal on proof size. There are two files.
+        assert_eq!(cnf_reserve(MAX_INPUT_BYTES + 1), REFUSED_OFFSET);
+        let _ = proof_reserve(TINY_PROOF.len());
+        write(&super::PROOF, TINY_PROOF);
+        assert_eq!(check(), REFUSED);
+    }
+
+    #[test]
+    fn the_ceiling_itself_is_accepted() {
+        // A boundary written `>=` instead of `>` would refuse a file it can
+        // hold, and nothing else in this suite would notice.
+        assert_ne!(proof_reserve(MAX_INPUT_BYTES), REFUSED_OFFSET);
+    }
+
+    /// A refusal must not leave the previous input checkable.
+    ///
+    /// This is the one that would have been a wrong answer rather than a
+    /// missing one: verify a proof, then reserve one too large, and a module
+    /// that kept the old bytes would report `VERIFIED` for a file the user had
+    /// already replaced.
+    #[test]
+    fn a_refusal_discards_what_was_there_before() {
+        load(TINY_CNF, TINY_PROOF);
+        assert_eq!(check(), VERIFIED);
+        assert_eq!(proof_reserve(MAX_INPUT_BYTES + 1), REFUSED_OFFSET);
+        assert_eq!(check(), REFUSED);
+    }
+
+    /// And a good reserve after a refused one clears the refusal.
+    #[test]
+    fn reserving_within_the_ceiling_again_clears_the_refusal() {
+        assert_eq!(proof_reserve(MAX_INPUT_BYTES + 1), REFUSED_OFFSET);
+        load(TINY_CNF, TINY_PROOF);
         assert_eq!(check(), VERIFIED);
     }
 }
