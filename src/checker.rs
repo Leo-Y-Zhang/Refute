@@ -120,6 +120,45 @@ pub struct Stats {
     /// Every live clause holding the negated pivot, every time — the loop has
     /// no early exit, because RAT is a claim about all of them.
     pub rat_candidates_checked: u64,
+    /// Bytes the clause store holds at the end of the run. DRAT only.
+    ///
+    /// The arena, the metadata array, the watch and occurrence lists, the
+    /// deletion index and the assignment. Summed from *capacities*, so it is
+    /// what the process asked the allocator for rather than what it is using,
+    /// and it accounted for 179.8 MB of a 182.6 MB peak working set on the
+    /// largest proof measured for `docs/TDD.md` part 4.
+    ///
+    /// It exists because a memory rule cannot be pinned by a verdict: every
+    /// variant measured for part 4 returned the same verdict on every
+    /// artefact, and the whole 128-test suite stayed green across a change
+    /// that moved the peak working set by a factor of five. A counter is the
+    /// only control a memory regression moves.
+    pub store_bytes: usize,
+    /// Of the arena, the bytes belonging to clauses that are no longer live.
+    ///
+    /// Zero after a compaction, and bounded by `live_arena_bytes` plus
+    /// [`crate::limits::Limits::max_dead_arena_lits`] at the end of any run
+    /// that deleted anything.
+    pub dead_arena_bytes: usize,
+    /// Of the arena, the bytes belonging to live clauses. DRAT only.
+    pub live_arena_bytes: usize,
+    /// Distinct clause bodies held by the deletion index. DRAT only.
+    ///
+    /// The index is keyed by literal set because a DRAT deletion names
+    /// literals rather than an identifier. It should hold one entry per
+    /// distinct *live* clause body; an entry per distinct body ever added is a
+    /// second copy of the whole proof, which is what it was.
+    pub deletion_index_entries: usize,
+    /// Arena compactions performed. DRAT only.
+    pub compactions: u64,
+    /// Occurrence-list entries examined while answering candidate queries.
+    /// DRAT only.
+    ///
+    /// The cost of the lazy occurrence index, and the trigger for abandoning
+    /// it: if a real proof reports more of these than
+    /// `rat_additions * peak_live_clauses`, the index is losing to the plain
+    /// scan and `Store::resolution_candidates` should become one.
+    pub occurrence_entries_filtered: u64,
 }
 
 /// Everything one run produces.
