@@ -1,0 +1,328 @@
+// Does the module say what the checker says?
+//
+// This is the only test in milestone 4 that really matters. Everything else
+// the playground does is interface; a page that reports a verdict the CLI does
+// not report is worse than no page at all, because it discredits every other
+// verdict this project has ever produced.
+//
+// The expectations are not written here. They come from the native binary, run
+// on the same two files, at run time. Writing them down a second time would
+// only prove that two lists agree with each other.
+//
+// The pair list is not written here either. It is read out of the test sources,
+// so the corpus this harness runs is by construction the corpus tests/*.rs
+// pins: add a fixture pair to a test and it is checked here on the next run,
+// with nothing to remember. Every proof file in the corpus must appear in some
+// pair, and the harness fails if one does not, so a fixture cannot go quietly
+// unchecked.
+//
+// Usage:
+//
+//     node tools/wasm_agreement.mjs [options]
+//
+//       --module <path>   the .wasm to test
+//                         (default target/wasm32-unknown-unknown/release-wasm/refute_wasm.wasm)
+//       --binary <path>   the native refute to compare against
+//                         (default target/debug/refute[.exe])
+//       --extra <dir>     also run every .cnf/.drat and .cnf/.lrat pair in a
+//                         directory, for certificates too large to commit
+//       --quiet           only print disagreements and the summary
+//
+// Exits 0 if every pair agrees and all three verdicts were seen, 1 otherwise.
+
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { basename, join } from 'node:path';
+
+const VERDICTS = ['VERIFIED', 'NOT VERIFIED', 'UNSUPPORTED'];
+
+function parseArgs(argv) {
+  const options = {
+    module: 'target/wasm32-unknown-unknown/release-wasm/refute_wasm.wasm',
+    binary: existsSync('target/debug/refute.exe')
+      ? 'target/debug/refute.exe'
+      : 'target/debug/refute',
+    extra: null,
+    quiet: false,
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--quiet') {
+      options.quiet = true;
+    } else if (arg === '--module' || arg === '--binary' || arg === '--extra') {
+      i += 1;
+      if (i >= argv.length) {
+        throw new Error(`${arg} needs a value`);
+      }
+      options[arg.slice(2)] = argv[i];
+    } else {
+      throw new Error(`unknown argument ${arg}`);
+    }
+  }
+  return options;
+}
+
+// ---------------------------------------------------------------------------
+// The corpus, read out of the tests that pin it
+
+const FIXTURES = join('tests', 'fixtures');
+
+/**
+ * Every (formula, proof) pair named anywhere in the Rust test sources.
+ *
+ * Matched on the shape rather than on the function name — `common::outcome`,
+ * `common::verdict`, `common::cli` and every local helper that takes the pair
+ * as its first two arguments all look identical here, and a helper added later
+ * will too.
+ */
+function pairsFromTests() {
+  const pattern =
+    /"([A-Za-z0-9_]+\.cnf)"\s*,\s*"([A-Za-z0-9_]+\.(?:lrat|drat))"/g;
+  const seen = new Map();
+  for (const entry of readdirSync('tests')) {
+    if (!entry.endsWith('.rs')) {
+      continue;
+    }
+    const source = readFileSync(join('tests', entry), 'utf8');
+    for (const match of source.matchAll(pattern)) {
+      const [, cnf, proof] = match;
+      seen.set(`${cnf} ${proof}`, { cnf, proof, from: entry });
+    }
+  }
+  return [...seen.values()].sort((a, b) =>
+    `${a.proof} ${a.cnf}`.localeCompare(`${b.proof} ${b.cnf}`),
+  );
+}
+
+/** Proof files in the corpus that no pair names. */
+function uncoveredProofs(pairs) {
+  const named = new Set(pairs.map((p) => p.proof));
+  return readdirSync(FIXTURES)
+    .filter((f) => f.endsWith('.lrat') || f.endsWith('.drat'))
+    .filter((f) => !named.has(f))
+    .sort();
+}
+
+/**
+ * Pairs in a directory outside the repository, for certificates too large to
+ * commit.
+ *
+ * Two conventions, because two exist in the wild. `tools/differential.sh` knows
+ * only the first, and the author's own generator writes the second: a `--keep`
+ * directory from `MathRecords/vdw/drat_certify.py` holds `f_n33_j4.cnf` beside
+ * `p_n33_j4.drat`, which share no stem at all. A harness that silently skipped
+ * that directory would report zero extra pairs and look like it had passed.
+ *
+ *   1. same stem      `x.cnf`   with `x.drat`   or `x.lrat`
+ *   2. f_ / p_ prefix `f_x.cnf` with `p_x.drat` or `p_x.lrat`
+ */
+function pairsFromDirectory(dir) {
+  const files = readdirSync(dir);
+  const pairs = [];
+  for (const proof of files.filter(
+    (f) => f.endsWith('.drat') || f.endsWith('.lrat'),
+  )) {
+    const stem = proof.slice(0, proof.lastIndexOf('.'));
+    const sameStem = `${stem}.cnf`;
+    const prefixed = stem.startsWith('p_')
+      ? `f_${stem.slice(2)}.cnf`
+      : undefined;
+    const cnf = files.includes(sameStem)
+      ? sameStem
+      : prefixed !== undefined && files.includes(prefixed)
+        ? prefixed
+        : undefined;
+    if (cnf !== undefined) {
+      pairs.push({ cnf, proof, from: dir, dir });
+    }
+  }
+  if (pairs.length === 0) {
+    throw new Error(
+      `--extra ${dir} holds no formula/proof pair this harness recognises. ` +
+        'Expected x.cnf beside x.drat, or f_x.cnf beside p_x.drat.',
+    );
+  }
+  return pairs.sort((a, b) => a.proof.localeCompare(b.proof));
+}
+
+// ---------------------------------------------------------------------------
+// The two checkers
+
+function nativeVerdict(binary, cnfPath, proofPath) {
+  const run = spawnSync(binary, [cnfPath, proofPath], { encoding: 'utf8' });
+  if (run.error) {
+    throw new Error(`cannot run ${binary}: ${run.error.message}`);
+  }
+  const line = (run.stdout ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.startsWith('s '));
+  if (line === undefined) {
+    throw new Error(
+      `${binary} printed no verdict line for ${basename(proofPath)}: ` +
+        `${JSON.stringify(run.stdout)} ${JSON.stringify(run.stderr)}`,
+    );
+  }
+  return line.slice(2);
+}
+
+/**
+ * One check, on its own instance.
+ *
+ * Fresh every time, and that is a memory rule rather than hygiene: `memory.grow`
+ * has no inverse, so linear memory is a high-water mark and reusing an instance
+ * charges the second check for the first. It is also what makes the peak figure
+ * below mean anything.
+ *
+ * The glue order is the documented one, and it is documented because the
+ * probe's harness got it wrong: take the pointer from the reserve call first,
+ * read `memory.buffer` second. Reading the buffer first hands `Uint8Array` a
+ * view that the growing memory has already detached.
+ */
+function wasmVerdict(moduleBytes, cnf, proof) {
+  const instance = new WebAssembly.Instance(
+    new WebAssembly.Module(moduleBytes),
+    {},
+  );
+  const exports = instance.exports;
+
+  const cnfOffset = exports.cnf_reserve(cnf.length);
+  const proofOffset = exports.proof_reserve(proof.length);
+  // Both views built after the last call that can grow memory, never before.
+  new Uint8Array(exports.memory.buffer, cnfOffset, cnf.length).set(cnf);
+  new Uint8Array(exports.memory.buffer, proofOffset, proof.length).set(proof);
+
+  let code;
+  // One call inside the clock, and only this one. The probe's first harness
+  // timed `check()` together with a second export that re-runs the whole check,
+  // and reported the sandbox as 2.3x native when it is 1.21x.
+  const started = process.hrtime.bigint();
+  try {
+    code = exports.check();
+  } catch (err) {
+    // A panic in the checker is a trap here. It is reported as what it is and
+    // never as a verdict.
+    return { verdict: `TRAPPED (${err.message})`, peak: NaN, seconds: NaN };
+  }
+  const seconds = Number(process.hrtime.bigint() - started) / 1e9;
+  const verdict = VERDICTS[code];
+  return {
+    verdict: verdict ?? `UNKNOWN CODE ${code}`,
+    // `memory.grow` has no inverse, so this is the high-water mark of the whole
+    // run rather than what is live at the end of it.
+    peak: exports.memory.buffer.byteLength,
+    seconds,
+  };
+}
+
+// ---------------------------------------------------------------------------
+
+const options = parseArgs(process.argv.slice(2));
+
+if (!existsSync(options.module)) {
+  console.error(`cannot read ${options.module}`);
+  console.error(
+    'build it first: cargo build --profile release-wasm ' +
+      '--target wasm32-unknown-unknown -p refute-wasm',
+  );
+  process.exit(1);
+}
+if (!existsSync(options.binary)) {
+  console.error(`cannot read ${options.binary}`);
+  console.error('build it first: cargo build');
+  process.exit(1);
+}
+
+const moduleBytes = readFileSync(options.module);
+
+const pairs = pairsFromTests();
+if (options.extra !== null) {
+  pairs.push(...pairsFromDirectory(options.extra));
+}
+
+const failures = [];
+const seenVerdicts = new Set();
+let checked = 0;
+
+if (!options.quiet) {
+  console.log(
+    `${'proof'.padEnd(42)} ${'formula'.padEnd(28)} ` +
+      `${'native'.padEnd(13)} ${'wasm'.padEnd(13)} ${'peak'.padEnd(9)} wasm`,
+  );
+}
+
+for (const pair of pairs) {
+  const dir = pair.dir ?? FIXTURES;
+  const cnfPath = join(dir, pair.cnf);
+  const proofPath = join(dir, pair.proof);
+  if (!existsSync(cnfPath) || !existsSync(proofPath)) {
+    failures.push(`${pair.proof}: named by ${pair.from} but not on disk`);
+    continue;
+  }
+
+  const native = nativeVerdict(options.binary, cnfPath, proofPath);
+  const { verdict, peak, seconds } = wasmVerdict(
+    moduleBytes,
+    readFileSync(cnfPath),
+    readFileSync(proofPath),
+  );
+  checked += 1;
+  seenVerdicts.add(native);
+
+  const agree = native === verdict;
+  if (!agree) {
+    failures.push(
+      `${pair.proof} against ${pair.cnf}: native says ${native}, ` +
+        `the module says ${verdict}`,
+    );
+  }
+  if (!options.quiet || !agree) {
+    const megabytes = Number.isNaN(peak)
+      ? '-'
+      : `${(peak / (1024 * 1024)).toFixed(1)} MB`;
+    const took = Number.isNaN(seconds) ? '-' : `${seconds.toFixed(2)} s`;
+    console.log(
+      `${pair.proof.padEnd(42)} ${pair.cnf.padEnd(28)} ` +
+        `${native.padEnd(13)} ${verdict.padEnd(13)} ${megabytes.padEnd(9)} ${took}` +
+        `${agree ? '' : '   <-- DISAGREE'}`,
+    );
+  }
+}
+
+// W1's coverage, stated rather than assumed. A proof fixture no test names is
+// a proof fixture this harness never runs, and silence about it would read as
+// having covered everything.
+const uncovered = uncoveredProofs(pairsFromTests());
+if (uncovered.length > 0) {
+  failures.push(
+    `${uncovered.length} proof fixture(s) are named by no test and so were ` +
+      `never checked: ${uncovered.join(', ')}`,
+  );
+}
+
+// W2. A module that collapsed UNSUPPORTED into NOT VERIFIED would agree with
+// the native checker on every fixture that is not binary, and this is the line
+// that notices.
+for (const verdict of VERDICTS) {
+  if (!seenVerdicts.has(verdict)) {
+    failures.push(
+      `no pair produced ${verdict}; the corpus must exercise all three ` +
+        'verdicts or agreement means less than it looks like it does',
+    );
+  }
+}
+
+console.log('');
+console.log(`pairs checked   ${checked}`);
+console.log(`verdicts seen   ${[...seenVerdicts].sort().join(', ')}`);
+console.log(`module          ${options.module} (${statSync(options.module).size} bytes)`);
+console.log(`native          ${options.binary}`);
+
+if (failures.length > 0) {
+  console.error('');
+  for (const failure of failures) {
+    console.error(`FAIL  ${failure}`);
+  }
+  process.exit(1);
+}
+console.log('agreement       every pair');

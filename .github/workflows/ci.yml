@@ -104,3 +104,11 @@ jobs:
       # mechanism behind the playground's privacy claim, and a mechanism is
       # worth asserting where a promise is not.
       - run: node tools/wasm_shape.mjs
+      # The native checker, to compare the module against. Debug rather than
+      # release: a verdict that depended on the optimisation level would be a
+      # far more interesting failure than a slow one.
+      - run: cargo build
+      # The only test in this milestone that really matters. Every committed
+      # fixture pair, through the module and through the binary, verdict against
+      # verdict. Not --quiet: the table is the evidence, and a tick is not.
+      - run: node tools/wasm_agreement.mjs
