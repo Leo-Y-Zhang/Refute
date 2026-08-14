@@ -15,7 +15,10 @@ says otherwise, so the document was corrected rather than the memory of it kept.
 **Run `tools/fuzz.py` to 10,000 cases with zero false accepts, then — and only
 then — rewrite the README's opening.** That order is the rollback section of
 `docs/TDD.md` part 3 and it is the one thing in this milestone that cannot be
-taken back. 2,000 cases have been run (seed 20260814); the gate is 10,000.
+taken back. **2,000 cases have been run at seed 20260814: 603 unsatisfiable
+and 1,397 satisfiable formulas, 6,220 comparisons, zero false accepts, 48
+strict wins all on the documented list, and 39.3 per cent of mutants still
+valid proofs that both checkers verify.** The gate is 10,000.
 
 Until that is done, **the README still describes milestone 1b**, and
 deliberately: it says Refute is an LRAT checker, which is now an understatement
