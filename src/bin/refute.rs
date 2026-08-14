@@ -28,6 +28,16 @@ fn main() -> ExitCode {
     ExitCode::from(run())
 }
 
+/// Bytes as kilobytes, truncating.
+///
+/// A method call rather than `/`, because the package denies arithmetic
+/// operators and a literal divisor is not an exception the lint makes. The
+/// truncation is deliberate: the figures this prints are megabytes on the
+/// proofs the counter exists for.
+fn kb(bytes: usize) -> usize {
+    bytes.saturating_div(1024)
+}
+
 fn run() -> u8 {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -164,6 +174,24 @@ fn run() -> u8 {
                 counters.propagations,
                 counters.watch_visits,
                 counters.occurrence_updates
+            );
+            // What the store holds, beside what it did. A memory rule cannot
+            // be pinned by a verdict — every store variant `docs/TDD.md`
+            // part 4 measured returned the same verdict on every artefact —
+            // so it is pinned by these, and a counter a reader cannot see on
+            // their own proof is not the control the milestone is buying.
+            // Kilobytes truncate: a fixture small enough to report 0 KB is a
+            // fixture whose store was never the question.
+            eprintln!(
+                "refute: {} KB held, {} KB live arena, {} KB dead arena, \
+                 {} compactions, {} deletion index entries, \
+                 {} occurrence entries filtered",
+                kb(counters.store_bytes),
+                kb(counters.live_arena_bytes),
+                kb(counters.dead_arena_bytes),
+                counters.compactions,
+                counters.deletion_index_entries,
+                counters.occurrence_entries_filtered
             );
         }
     }

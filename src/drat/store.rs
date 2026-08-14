@@ -34,6 +34,7 @@
 //! end of every run, on every fixture.
 
 use std::collections::HashMap;
+use std::mem::size_of;
 
 use crate::checker::Stats;
 use crate::cnf::Cnf;
@@ -82,6 +83,36 @@ fn normalize(lits: &[Lit]) -> Vec<Lit> {
     sorted.sort_unstable();
     sorted.dedup();
     sorted
+}
+
+/// What the store holds at the end of a run, in bytes.
+///
+/// The counters that make a memory rule assertable. `docs/TDD.md` part 4
+/// measured a change that moved peak working set by a factor of five and left
+/// all 128 tests green: a verdict cannot pin this, so a number has to.
+pub(crate) struct Footprint {
+    /// Every allocation the store owns.
+    pub(crate) store_bytes: usize,
+    /// Of the arena, the literals of clauses that are still live.
+    pub(crate) live_arena_bytes: usize,
+    /// Of the arena, the literals of clauses that are not.
+    pub(crate) dead_arena_bytes: usize,
+    /// Distinct clause bodies the deletion index holds keys for.
+    pub(crate) deletion_index_entries: usize,
+}
+
+/// A `Vec<Vec<u32>>`: the slot vector itself, plus every slot's own heap.
+///
+/// The capacity is passed rather than read from the slice because a slice has
+/// forgotten it, and the outer vector's spare capacity is real memory: it is
+/// 96 bytes per variable whether a literal is ever pushed into it or not, which
+/// is the term `Limits::max_drat_var` exists to bound.
+fn nested_bytes(capacity: usize, slots: &[Vec<u32>]) -> usize {
+    let mut bytes = capacity.saturating_mul(size_of::<Vec<u32>>());
+    for slot in slots {
+        bytes = bytes.saturating_add(slot.capacity().saturating_mul(size_of::<u32>()));
+    }
+    bytes
 }
 
 /// The clause database and the assignment it propagates under.
@@ -268,11 +299,22 @@ impl Store {
     /// because the caller assigns and propagates while it walks the list, and
     /// a borrow of the index across that would be a lie about what the loop
     /// can touch.
-    pub(crate) fn resolution_candidates(&self, pivot: Lit) -> Vec<u32> {
-        match self.occ.get(code(pivot.negate())) {
+    ///
+    /// Takes `&mut self` because it counts. The entries it walks are the price
+    /// of the index on the query side, and the trigger for abandoning it is
+    /// written against that number in `docs/TDD.md` part 4. Counting inside
+    /// the function is what keeps the figure honest if the body ever becomes a
+    /// filter or a scan.
+    pub(crate) fn resolution_candidates(&mut self, pivot: Lit) -> Vec<u32> {
+        let ids = match self.occ.get(code(pivot.negate())) {
             Some(ids) => ids.clone(),
             None => Vec::new(),
-        }
+        };
+        self.stats.occurrence_entries_filtered = self
+            .stats
+            .occurrence_entries_filtered
+            .saturating_add(u64::try_from(ids.len()).unwrap_or(u64::MAX));
+        ids
     }
 
     /// The literals of a clause, in the arena's order.
@@ -520,6 +562,84 @@ impl Store {
     /// Slots in the assignment vector, for `--stats`.
     pub(crate) fn assignment_slots(&self) -> usize {
         self.assign.len()
+    }
+
+    /// What the store holds, walked at the end of a run.
+    ///
+    /// Summed from **capacities**, not from lengths, so it reports what the
+    /// process asked the allocator for rather than what it is using. That is
+    /// the figure a peak working set can be compared against: the
+    /// instrumented build `docs/TDD.md` part 4 was measured with accounted for
+    /// 179.8 MB of a 182.6 MB peak on the largest proof in the ladder.
+    ///
+    /// One term is a model and is named as such. `HashMap` does not report the
+    /// bytes of its own table, so the deletion index's table is priced at one
+    /// key, one value and one control byte per element it says it can hold
+    /// without reallocating. Everything behind it — the boxed keys, the
+    /// identifier lists — is a real allocation and is summed exactly. The
+    /// arena, the metadata array, the watch and occurrence lists, the unit
+    /// list, the assignment and the trail are every one of them a capacity the
+    /// container reports itself.
+    ///
+    /// O(clauses ever added) plus O(literal codes), once per run. It walks the
+    /// metadata array rather than maintaining a running pair, deliberately:
+    /// this commit adds counters and changes no behaviour, and the running
+    /// pair arrives with the compaction that needs it as a trigger.
+    pub(crate) fn footprint(&self) -> Footprint {
+        let lit_bytes = size_of::<Lit>();
+        let mut live_lits = 0usize;
+        let mut dead_lits = 0usize;
+        for meta in &self.clauses {
+            let len = usize::try_from(meta.len).unwrap_or(0);
+            if meta.live {
+                live_lits = live_lits.saturating_add(len);
+            } else {
+                dead_lits = dead_lits.saturating_add(len);
+            }
+        }
+
+        let store_bytes = self
+            .lits
+            .capacity()
+            .saturating_mul(lit_bytes)
+            .saturating_add(
+                self.clauses
+                    .capacity()
+                    .saturating_mul(size_of::<ClauseMeta>()),
+            )
+            .saturating_add(nested_bytes(self.watches.capacity(), &self.watches))
+            .saturating_add(nested_bytes(self.occ.capacity(), &self.occ))
+            .saturating_add(self.deletion_index_bytes())
+            .saturating_add(self.units.capacity().saturating_mul(size_of::<u32>()))
+            .saturating_add(self.assign.capacity())
+            .saturating_add(self.trail.capacity().saturating_mul(lit_bytes));
+
+        Footprint {
+            store_bytes,
+            live_arena_bytes: live_lits.saturating_mul(lit_bytes),
+            dead_arena_bytes: dead_lits.saturating_mul(lit_bytes),
+            deletion_index_entries: self.bykey.len(),
+        }
+    }
+
+    /// The deletion index: its table, its keys, and the identifier lists.
+    ///
+    /// The largest single item in the store on the proof part 4 measured —
+    /// 96.5 MB of 179.8 MB, of which 1.6 MB belonged to a clause still live —
+    /// because `delete` pops an identifier out of the list and leaves the key
+    /// behind, so the map keeps a copy of the literals of every distinct
+    /// clause the proof ever contained.
+    fn deletion_index_bytes(&self) -> usize {
+        let per_slot = size_of::<Box<[Lit]>>()
+            .saturating_add(size_of::<Vec<u32>>())
+            .saturating_add(1);
+        let mut bytes = self.bykey.capacity().saturating_mul(per_slot);
+        for (key, ids) in &self.bykey {
+            bytes = bytes
+                .saturating_add(key.len().saturating_mul(size_of::<Lit>()))
+                .saturating_add(ids.capacity().saturating_mul(size_of::<u32>()));
+        }
+        bytes
     }
 }
 
