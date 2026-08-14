@@ -16,11 +16,15 @@ set -euo pipefail
 
 kissat="${KISSAT:-}"
 drat_trim="${DRAT_TRIM:-}"
+# The one fixture whose formula this repository does not build. See the note at
+# the bottom of the script.
+vdw_cnf="${VDW_CNF:-}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --kissat) kissat="$2"; shift 2 ;;
         --drat-trim) drat_trim="$2"; shift 2 ;;
+        --vdw) vdw_cnf="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -184,4 +188,37 @@ fi
 echo "validated r11 lemma sequence against drat-trim"
 
 echo
-echo "corpus size: $(du -sk "$fixtures" | cut -f1) KB in $(ls "$fixtures" | wc -l) files"
+# Bytes, not blocks. `du` rounds every file up to a cluster, which on a corpus
+# of small fixtures reported 496 KB against the 500 KB budget while the content
+# was 280 KB -- a figure that would have failed the budget on the next fixture
+# added, for no reason a clone would ever see.
+echo "corpus size: $(find "$fixtures" -type f -printf '%s
+' | awk '{s+=$1} END {printf "%d KB", (s+1023)/1024}') in $(ls "$fixtures" | wc -l) files (500 KB budget)"
+
+# The van der Waerden certificate, whose formula is built by a generator in
+# another of the author's repositories rather than by tools/instances.py. The
+# committed bytes are checked by CI like every other fixture; regenerating them
+# needs that repository, so this step is skipped loudly rather than silently:
+#
+#   VDW_CNF=<dir>/A217058_n21_j1.cnf tools/gen_fixtures.sh
+#
+# built there by `python vdw/drat_certify.py --seq A217058 --rung 1 --keep <dir>`.
+# The proof itself is produced here, by the same kissat command as every other
+# fixture, so what is imported is a formula and never a proof.
+if [ -z "$vdw_cnf" ]; then
+    echo "skipping vdw_a217058_n21: pass --vdw <formula.cnf> or set VDW_CNF"
+else
+    cp "$vdw_cnf" "$fixtures/vdw_a217058_n21.cnf"
+    "$kissat" --no-binary -q "$fixtures/vdw_a217058_n21.cnf" \
+        "$fixtures/vdw_a217058_n21.drat" && rc=$? || rc=$?
+    if [ "$rc" -ne 20 ]; then
+        echo "vdw_a217058_n21: kissat did not report UNSATISFIABLE (exit $rc)" >&2
+        exit 1
+    fi
+    if ! "$drat_trim" "$fixtures/vdw_a217058_n21.cnf" \
+        "$fixtures/vdw_a217058_n21.drat" -f | grep -q '^s VERIFIED'; then
+        echo "vdw_a217058_n21: drat-trim did not verify its own proof" >&2
+        exit 1
+    fi
+    echo "generated vdw_a217058_n21.drat"
+fi

@@ -728,3 +728,34 @@ fn assert_var_exceeds_limit(outcome: refute::Outcome, what: &str) {
         refusal.reason
     );
 }
+
+/// P19: a real certificate of published mathematics, checked from the raw
+/// proof the solver wrote.
+///
+/// The upper bound behind the second term of A217058, the mixed van der
+/// Waerden numbers w(2; 3, 4, ...), as computed in another of the author's
+/// repositories. Its lower bound is a colouring anyone can check by hand; its
+/// upper bound is a solver saying UNSAT, which is an absence, and an absence
+/// is exactly what a buggy solver reports.
+///
+/// Checking it here closes that in a way the LRAT fixtures cannot. Against an
+/// LRAT file `drat-trim` is still the producer even when it is not the
+/// checker; against this one it is neither, so the only things trusted are
+/// `kissat` having emitted the proof and this checker having replayed it.
+///
+/// It is also the largest real RAT-carrying proof in the corpus, at a scale
+/// none of the pigeonhole fixtures reach.
+#[test]
+fn p19_a_van_der_waerden_certificate_verifies_from_raw_drat() {
+    let outcome = common::outcome("vdw_a217058_n21.cnf", "vdw_a217058_n21.drat");
+    assert_eq!(outcome.verdict, Verdict::Verified);
+    let stats = outcome.stats;
+    assert_eq!(stats.additions, 559, "additions");
+    assert_eq!(stats.deletions, 633, "deletions");
+    assert_eq!(stats.peak_live_clauses, 571, "peak live clauses");
+    assert_eq!(stats.rup_additions, 519, "RUP additions");
+    assert_eq!(stats.rat_additions, 40, "RAT additions");
+    assert_eq!(stats.rat_candidates_checked, 48, "candidates checked");
+    assert_run_invariants(&stats, "vdw_a217058_n21.drat");
+    common::cli("vdw_a217058_n21.cnf", "vdw_a217058_n21.drat").assert("s VERIFIED", 0);
+}
