@@ -4,6 +4,12 @@
 //! be assumed so now. A single literal of `2000000000` in a clause would
 //! otherwise size the assignment vector to two gigabytes, so the parser refuses
 //! literals beyond `max_var` instead of resizing to meet them.
+//!
+//! One field here is not a guard. `max_dead_arena_lits` decides when the DRAT
+//! store reclaims what it is holding, so no input can cross it and nothing is
+//! ever rejected for it. It lives here because it is the other knob that
+//! decides how much memory a run costs, and a reader looking for that will
+//! look in this file.
 
 /// Default variable ceiling: 2^26.
 ///
@@ -39,6 +45,21 @@ pub const DEFAULT_MAX_CLAUSE_LEN: usize = 1 << 24;
 /// file with no line breaks in it rather than a limit a producer can meet.
 pub const DEFAULT_MAX_LINE_BYTES: usize = 1 << 24;
 
+/// Default floor under the arena compaction trigger: 1,024 literals.
+///
+/// Compaction runs when the literals of dead clauses exceed both the literals
+/// of live ones and this floor, so the floor is what stops a proof that
+/// deletes its second clause from copying a four-literal arena. It is a floor
+/// and not a ratio because the ratio is already the other half of the test.
+///
+/// 1,024 literals is 4 KB, which is below anything the budget in
+/// `docs/TDD.md` part 4 is stated in and above every fixture in the corpus
+/// except the real certificate. Setting it to zero compacts on every deletion
+/// that leaves any dead literal at all, which is what the fuzz harness does:
+/// random proofs are small and delete little, so without it almost none of the
+/// ten thousand cases would enter the code the milestone added.
+pub const DEFAULT_MAX_DEAD_ARENA_LITS: usize = 1024;
+
 /// Ceilings applied while parsing. Exceeding one is a parse error, never a
 /// resize and never a truncation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +88,19 @@ pub struct Limits {
     /// clause in memory by design: a line bound there caps a fraction of an
     /// allocation the formula's own size already decides.
     pub max_line_bytes: usize,
+    /// Compact the DRAT clause arena once the literals of dead clauses exceed
+    /// both the literals of live ones and this floor.
+    ///
+    /// Not a ceiling like the four above: nothing is rejected for crossing it,
+    /// and no input can be made to fail by choosing it badly. It decides when
+    /// the store reclaims rather than what it will accept, which is why it is
+    /// the one field here that a proof cannot reach. The LRAT path ignores it;
+    /// its database is a map whose deletions really delete.
+    ///
+    /// Zero compacts on every deletion that leaves a dead literal behind. That
+    /// is the setting the fuzz harness uses and it is not a sensible default:
+    /// it makes the arena copy O(live) per deletion.
+    pub max_dead_arena_lits: usize,
 }
 
 impl Default for Limits {
@@ -76,6 +110,7 @@ impl Default for Limits {
             max_drat_var: DEFAULT_MAX_DRAT_VAR,
             max_clause_len: DEFAULT_MAX_CLAUSE_LEN,
             max_line_bytes: DEFAULT_MAX_LINE_BYTES,
+            max_dead_arena_lits: DEFAULT_MAX_DEAD_ARENA_LITS,
         }
     }
 }

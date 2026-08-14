@@ -14,6 +14,17 @@ use refute::{check_readers, check_readers_with_format, Format, Limits, Verdict};
 const USAGE: &str =
     "usage: refute [check] <formula.cnf> <proof.lrat|proof.drat> [--drat|--lrat] [--stats]";
 
+/// The one flag `USAGE` does not list, and deliberately.
+///
+/// It sets `Limits::max_dead_arena_lits`, which decides when the DRAT store
+/// compacts its arena. It exists so that `tools/fuzz.py --force-compaction`
+/// can drive ten thousand random proofs through code that a random proof would
+/// otherwise almost never reach: they are small and they delete little. It
+/// changes no verdict on any input — that is the property the fuzz run is
+/// there to test — so documenting it in the usage line would advertise a knob
+/// with nothing for a user to gain by turning it.
+const DEAD_ARENA_FLAG: &str = "--max-dead-arena-lits=";
+
 /// Verified. The only success.
 const EXIT_VERIFIED: u8 = 0;
 /// Read and found wanting, including anything that failed to parse.
@@ -64,6 +75,7 @@ fn run() -> u8 {
     let mut stats = false;
     let mut flags_ended = false;
     let mut forced: Option<Format> = None;
+    let mut dead_arena_lits: Option<usize> = None;
     for arg in &args {
         if flags_ended {
             positional.push(arg);
@@ -82,6 +94,21 @@ fn run() -> u8 {
             "--help" | "-h" | "--version" | "-V" => {
                 eprintln!("{USAGE}");
                 return EXIT_USAGE;
+            }
+            // A bad value is a usage error and not a verdict, because nothing
+            // about the proof was in question. Same treatment as a missing
+            // path: exit 3, so a typo cannot read as a pass.
+            other if other.starts_with(DEAD_ARENA_FLAG) => {
+                match other
+                    .get(DEAD_ARENA_FLAG.len()..)
+                    .and_then(|value| value.parse::<usize>().ok())
+                {
+                    Some(lits) => dead_arena_lits = Some(lits),
+                    None => {
+                        eprintln!("refute: '{other}' needs a non-negative number");
+                        return EXIT_USAGE;
+                    }
+                }
             }
             other => positional.push(other),
         }
@@ -122,7 +149,10 @@ fn run() -> u8 {
 
     let formula = BufReader::new(formula_file);
     let proof = BufReader::new(proof_file);
-    let limits = Limits::default();
+    let mut limits = Limits::default();
+    if let Some(lits) = dead_arena_lits {
+        limits.max_dead_arena_lits = lits;
+    }
     let outcome = match forced {
         Some(format) => check_readers_with_format(formula, proof, &limits, format),
         None => check_readers(formula, proof, &limits),
