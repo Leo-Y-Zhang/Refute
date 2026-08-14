@@ -2429,9 +2429,14 @@ experiment got.
 
 # Part 5 — milestone 4: the playground
 
-**Status:** draft · **Date:** 2026-08-14 · **Supersedes:** nothing. No
-acceptance rule in parts 1 to 4 moves, and the checker crate is not edited at
-all. This milestone adds a second crate, a page, and a build step.
+**Status:** built, build order steps 2 to 7; **not published** · **Date:**
+2026-08-14 · **Supersedes:** nothing. No acceptance rule in parts 1 to 4 moves,
+and the checker crate is not edited at all. This milestone adds a second crate,
+a page, and a build step.
+
+*What was designed is below, as designed. What the build measured, changed and
+found is in "What the build changed" at the end of this part — including four
+defects, every one of them in the checking rather than in the checked.*
 
 ## The measurement, first — and it answered part 4's open question
 
@@ -2777,3 +2782,173 @@ part 4's fuzz coverage counter follows.
 4. **Does the page get the rejection detail in the first commit or the second?**
    Proposed: the second, because a verdict-only page is useful and a page that
    reports the wrong failing line is worse than one that reports none.
+
+---
+
+## What the build changed, and what it measured
+
+*Written after build order steps 2 to 7, on the code that exists. Every number
+below is from a run on this machine or from CI run 31825567727, and the
+sections above are left as they were designed so that the difference is
+readable.*
+
+### The wrapper needed less than the design allowed it
+
+The design says the export boundary has to leave `unsafe_code` unset, because
+`#[no_mangle]` trips the lint. It does not. `unsafe_code = "deny"` in the
+wrapper's manifest, lifted by `#[allow(unsafe_code)]` on each of the three
+exports, keeps every *other* unsafe construct in that crate a compile error and
+puts the exception in a diff a reviewer sees. Zero `unsafe` blocks, as designed,
+and now enforced by the compiler as well as by a grep.
+
+`rust-lld` also refuses to link an undefined symbol on this target, which the
+design did not know: an accidental import is a **link failure** before it is a
+check failure. Measured while deliberately adding one.
+
+### Profiles are workspace-wide, which the design missed
+
+`[profile.release]` in a workspace root applies to every member. Tuning it for
+a 73 KB module would silently have re-optimised the CLI, and every peak-memory
+and wall-clock figure in part 4 was measured on the release binary as it is
+built today. The size settings live in a named `release-wasm` profile instead,
+selected explicitly or not at all.
+
+### The module
+
+| | |
+|---|---:|
+| stable 1.97.1, Windows and Linux, byte-identical | **72,822** bytes |
+| 1.74.0 | 73,632 bytes, plus `__data_end` and `__heap_base` |
+| after the size refusal (step 4) | **73,165** bytes |
+| imports | **none** |
+| exported functions | `check`, `cnf_reserve`, `proof_reserve` |
+
+The MSRV leg emits two globals the pinned toolchain does not, which is why
+`tools/wasm_shape.mjs` asserts the exported *functions* exactly and prints
+globals without gating on them. A global is an address, not a capability. The
+first version of that check asserted an exact export set and went red on a
+module that was in every way correct.
+
+### Agreement, and what it is worth
+
+`tools/wasm_agreement.mjs`, on every push, on both toolchains:
+
+    67 committed pairs, every one agreeing
+    all three verdicts seen
+    A217058 a(4) rung via --extra: VERIFIED, 8.4 MB, 0.85 s
+
+The last line is the probe's gate figure reproduced to the tenth of a megabyte
+and the hundredth of a second, on a module built from committed source rather
+than from a throwaway crate outside the repository.
+
+Neither list the harness works from is written in it. Expectations come from
+the native binary at run time; pairs are read out of `tests/*.rs`. A proof
+fixture that no test names is a failure, so the corpus cannot quietly shrink.
+
+### The budget, as built
+
+`MAX_INPUT_BYTES` is 32 MiB and **applies to the formula as well as the
+proof**, where this part states the refusal on proof size alone. The budget
+names both terms, there are two files, and a 500 MB formula with a one-line
+proof would otherwise reach the ceiling by dying at it.
+
+A refused reserve allocates nothing, frees what was there, returns offset 0 and
+makes `check()` return 3:
+
+    one byte over   offset 0, check 3, peak 1.1 MB
+    at the ceiling  offset 1114120,    peak 33.1 MB
+
+Zero is an unambiguous sentinel because an empty `Vec<u8>` is
+dangling-but-aligned at 1, never null, and there is a test whose only job is to
+keep that true.
+
+The ceiling exists in `wasm/src/lib.rs` and in `page/limits.js` and has to: the
+page refuses before it instantiates anything, so it cannot ask the module. The
+harness reads both, fails if they differ, and then checks the compiled module
+accepts exactly that and refuses one byte more.
+
+### W4, W6 and W8, measured
+
+    W4  a view taken before a growing reserve: detached, as documented;
+        the pointer-first order after it: VERIFIED
+    W6  two empty files: NOT VERIFIED, the same as the CLI
+    W8  one instance: 17.3 MB after a 16 MB check, still 17.3 MB after a
+        tiny one. A fresh instance for that same tiny check: 1.1 MB
+
+W8's first version used the largest committed fixture and produced 1.2 MB
+against 1.1 MB — a true statement and no evidence at all.
+
+### The page, and rollback steps 2 and 3
+
+`tools/browser_check.mjs` drives headless Chrome over the DevTools protocol
+against the **built artefact**, and runs in CI on every push. Rollback step 2's
+desktop half and rollback step 3 are therefore automated; **the phone half is
+not, and is still the owner's**.
+
+    tiny         VERIFIED      VERIFIED      1.1 MB   0.00 s
+    vdw-n21      VERIFIED      VERIFIED      1.3 MB   0.01 s
+    pigeonhole   VERIFIED      VERIFIED      1.2 MB   0.00 s
+    corrupted    NOT VERIFIED  NOT VERIFIED  1.1 MB   0.00 s
+    binary       UNSUPPORTED   UNSUPPORTED   1.1 MB   0.00 s
+
+    requests: every one on the page's own origin, workers included
+
+That last clause is a correction. The check watched the page target only, and
+`refute_wasm.wasm` — the largest thing the page fetches — was **missing from
+its own request list**, because a worker is a separate target. A worker is
+exactly where a call to somewhere else would be least visible. It auto-attaches
+now, and fails if it never sees the module fetched at all.
+
+### Four defects the build found, all in the checking rather than the checked
+
+1. **A guard that read its own explanation.** `the_checker_crate_still_forbids_unsafe`
+   searched the whole manifest, and the manifest's comment explains the second
+   crate in a sentence containing `unsafe_code = "forbid"`. Relaxing the setting
+   to `deny` left it green. Comment lines are stripped now, in that test and in
+   the harness's constant reader.
+2. **A missing example reported `NOT VERIFIED`.** `fetch(...).arrayBuffer()` on
+   a 404 returns the error page's body; the checker read that as an unparseable
+   formula and the panel gave a verdict about a file that was never fetched.
+   Found within a minute of pointing the browser check at a stale build
+   directory. The page checks `response.ok` and says *Example not available*,
+   which is a broken link and says so.
+3. **A check that could not finish.** The browser check held its CI step open
+   until the job timeout, three times, for two different reasons: a spawned
+   server whose inherited stderr pipe kept the step alive, and — after that was
+   removed — an in-process server that kept the event loop alive so the `exit`
+   handler meant to close it could never run. 2m12s and killed, against 31s and
+   exit 0. Two unbounded waits were closed at the same time, and `until()` now
+   races its deadline against the predicate rather than checking it afterwards.
+4. **A cached build that looked like a measurement.** Two toolchains reported an
+   identical module size because cargo considered the artefact fresh. Forcing a
+   rebuild for each shows 72,822 against 73,632.
+
+### Deviations from the build order, and why
+
+- **Steps 2 and 3 gained CI jobs.** The build order says step 2 produces the
+  module; a claim that it does is worth nothing unless something runs. `wasm`
+  builds it on both toolchains and runs the shape check and the agreement
+  harness; `page` builds the artefact and drives it in a browser.
+- **`cargo test` and `cargo clippy` became `--workspace`.** Not one existing
+  test changed, and without it the one file in this repository that
+  `unsafe_code = "forbid"` does not cover was covered by nothing.
+- **The size refusal applies to both inputs**, as above.
+- **Three guards landed at step 2** rather than with the tests they resemble,
+  and each was observed failing against the defect it names before the crate
+  existed.
+- **The a(4) rung is not the preloaded example**, because it is not committed
+  and this milestone did not commit it. See open question 2, which is now the
+  owner's to answer.
+- **Step 5 gained a browser check**, which the build order puts at steps 8 and
+  9. Writing the page without one would have meant asserting it worked.
+
+### What is not done
+
+- **Rollback step 2's phone half.** No phone has been measured, and open
+  question 1 should be answered after it rather than before.
+- **Step 10.** The page is not published and the README does not link it.
+  Publishing is the owner's, from the Actions tab, and enabling Pages in the
+  repository settings is a separate act that is also the owner's.
+- **The rejection detail.** The module returns a verdict and nothing else, so
+  the page shows a verdict and nothing else, and says so in its own footer.
+  That is open question 4, answered as proposed.

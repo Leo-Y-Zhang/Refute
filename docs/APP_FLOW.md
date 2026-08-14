@@ -355,3 +355,67 @@ accessibility path are as part 2 wrote them. The privacy claim in particular is
 unchanged and now has a mechanism behind it: the module has **no imports at
 all**, so it cannot call out, and a `Content-Security-Policy` restricted to the
 page's own origin makes the network tab the proof rather than the promise.
+
+---
+
+## Part 2c — what the built page does, against what part 2 predicted (2026-08-14)
+
+Part 2 was written before anything existed and part 2b corrected it from a
+probe. This is the page as built: `page/index.html`, `page/style.css`,
+`page/main.js`, `page/worker.js`, `page/limits.js`, `page/favicon.svg`. No
+framework, no dependency, nothing fetched from another origin.
+
+Every row below is checked on every push by `tools/browser_check.mjs`, which
+drives headless Chrome against the built artefact and reads the verdict out of
+the DOM.
+
+### Rows that are as part 2 wrote them
+
+- **Landing.** One sentence, a row of preloaded examples, two file inputs, a
+  Check button that stays disabled until both files are chosen.
+- **Checking.** On a Web Worker, with a cancel control. Cancelling terminates
+  the worker, which is also how its memory comes back.
+- **Memory exceeded.** No retry button. It names the file, its size, the
+  ceiling, and prints the exact `refute` command.
+- **Permissions.** None. No accounts, no storage, no cookies, no telemetry.
+  A `Content-Security-Policy` of `default-src 'self'` with `'wasm-unsafe-eval'`
+  for the module and nothing else.
+- **Accessibility.** Skip link, real `<input type=file>` elements beside the
+  drop zones, the verdict panel an `aria-live="polite"` region that takes
+  focus, and the verdict word always present as text with a shape beside it.
+
+### Rows that changed, and why
+
+**"Progress by steps checked" is elapsed time instead.** The module returns a
+verdict and nothing else in this milestone, so there is no step count to show.
+A bar that moved anyway would be an animation, not information. The panel shows
+seconds elapsed, which is true, and the footer says in as many words that the
+failing step, the line and the reason are the CLI's for now.
+
+**The verdict panel shows peak memory.** It was not in part 2 and it is the one
+number a reader can use to predict whether their own proof will fit.
+
+**A new state: "Example not available".** Part 2 has no row for a preloaded
+example that fails to load, and the first version of the page had no handling
+for it — `fetch(...).arrayBuffer()` on a 404 returns the error page's body, the
+checker read it as an unparseable formula, and the panel reported **NOT
+VERIFIED**. A verdict, about a file that was never fetched. The page checks
+`response.ok` now and says the link is broken, which is what it is. Nothing on
+this page may report a verdict about something it did not check.
+
+**The preloaded examples are committed fixtures, not the a(4) rung.** Five of
+them, covering all three verdicts, including `vdw_a217058_n21` — a real
+certificate of a published van der Waerden term at 20 KB. The ~2.5 MB a(4) rung
+the PRD names is not committed; see TDD part 5, open question 2, which is the
+owner's.
+
+**A deep link runs on arrival**, as part 2 specifies: `?example=vdw-n21`. The
+identifiers are `tiny`, `vdw-n21`, `pigeonhole`, `corrupted` and `binary`.
+
+### The one thing the page will not do
+
+It will not show a verdict it did not receive from the module. Every panel that
+is not a verdict — too large, internal error, checker could not start, example
+not available — says what happened instead, and none of them uses a verdict
+word. A trap in the module is reported as an internal error, never as `NOT
+VERIFIED`, because a crash is not an accusation.

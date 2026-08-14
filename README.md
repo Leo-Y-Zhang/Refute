@@ -228,13 +228,16 @@ false `VERIFIED`.
 
 ```
 cargo build --release
-cargo test
+cargo test --workspace
 ```
 
-151 tests: 13 proofs that must verify and 24 corruption controls that must not
+165 tests: 13 proofs that must verify and 24 corruption controls that must not
 on the LRAT path, 35 on the DRAT path, 26 boundary cases, 16 on what the clause
-store holds, 13 on the command line contract, 5 on the trust boundary, and 19
-unit tests inside the library.
+store holds, 13 on the command line contract, 8 on the trust boundary, 19 unit
+tests inside the library, and 11 in the WebAssembly wrapper described below.
+
+`--workspace` because there are two crates now, and the second one exists for a
+reason worth reading: [the playground](#the-playground).
 
 **N1–N12 and R1–R8 were written and run before the rule that catches them
 existed, and observed failing there.** Milestone 1's were run against a
@@ -316,6 +319,67 @@ KISSAT=/path/to/kissat DRAT_TRIM=/path/to/drat-trim tools/gen_fixtures.sh
 The script is deterministic; a re-run produces byte-identical files. No build
 location appears in any tracked file. See `tests/fixtures/README.md` for the
 provenance of each one.
+
+## The playground
+
+There is a browser build. It is **not published yet** — this section describes
+how to run it locally, and nothing here links to a live page because there is
+not one.
+
+```
+rustup target add wasm32-unknown-unknown
+cargo build --profile release-wasm --target wasm32-unknown-unknown -p refute-wasm
+node tools/serve_page.mjs
+```
+
+Then open the address it prints. `file://` will not do: a page cannot start a
+worker or fetch a sibling from it.
+
+The module is **73,165 bytes**, has no dependencies, and **imports nothing at
+all** — which is the mechanism behind the one claim the page makes about
+itself. A module with no imports cannot call out, because there is nothing to
+call: no fetch, no clock, no random source, no host function of any kind. Your
+files stay in the tab. `node tools/wasm_shape.mjs` asserts that on every push,
+and `tools/browser_check.mjs` records every request the page and its worker
+make and fails if one leaves the origin.
+
+The export boundary is a second crate, `refute-wasm`, and that is not
+housekeeping. `unsafe_code = "forbid"` in this package blocks every form a
+WebAssembly export can take — `#[no_mangle]`, `#[export_name]` and
+`unsafe extern` alike, all three measured. The alternatives were to weaken a
+property this README states, or to take a dependency that ships its own
+`unsafe`. Instead the exports live one crate away, `refute` is not edited at
+all, and the wrapper contains **zero `unsafe` blocks** of its own: it hands
+JavaScript an offset and JavaScript dereferences it, which is JavaScript's
+business. `tests/trust_boundary.rs` asserts both halves.
+
+The page checks the same way the CLI does, and that is tested rather than
+asserted:
+
+```
+cargo build
+node tools/wasm_agreement.mjs
+```
+
+Every committed formula-and-proof pair goes through the module and through the
+native binary, and the two verdicts must match — 67 pairs, all three verdicts,
+on every push and on both toolchains. The expectations are not written down
+anywhere: they come from the binary, at run time. Add `--extra <dir>` to check
+certificates too large to commit. The A217058 a(4) rung, 2,508,578 bytes, takes
+**8.4 MB of linear memory and 0.85 s** in the browser.
+
+### What it refuses, and why it is not a bug
+
+The page refuses any file over **32 MB**, before it instantiates anything. A
+tab has to hold the whole proof in memory before the checker can read a byte of
+it, where the CLI streams it and holds one line; `memory.grow` has no inverse,
+so a transient peak is permanent for the life of the instance. The refusal is a
+decision taken with the file size in hand — one byte over the ceiling allocates
+nothing at all — and it names the exact `refute` command instead of offering a
+retry, because a retry after an out-of-memory is a lie.
+
+WebAssembly costs about a fifth in speed, not an order of magnitude: 1.21x
+native on the largest artefact measured.
 
 ## The property this is all in service of
 

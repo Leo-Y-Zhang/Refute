@@ -154,7 +154,7 @@ milestone 1b lands.
 | 1b | RAT hint blocks | The author's a(4)-rung certificate checks; `s UNSUPPORTED` becomes rare |
 | 2 | Direct DRAT checking; differential fuzzing vs `drat-trim -f` | The a(4)-rung raw `.drat` verifies with `drat-trim` out of the chain; 10k fuzz cases, zero false accepts |
 | 3 | Native CLI for large proofs | The a(7)-rung proof checks within a **stated** memory budget, from its raw `.drat` and from its `.lrat`. *The "~200 MB LRAT" this row used to say was an estimate: the artefact was built on 2026-08-14 and measures 117.5 MB of LRAT against 87.5 MB of raw DRAT* |
-| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser. *Designed 2026-08-14 in [TDD part 5](TDD.md#part-5--milestone-4-the-playground), measurement-led: the library compiles to `wasm32-unknown-unknown` at 73,699 bytes with no dependencies, agrees with the native checker on all eight fixture pairs and all three verdicts, and the gate artefact needs **8.4 MB and 0.85 s**. The export boundary lives in a second crate so `refute` keeps `unsafe_code = "forbid"`* |
+| 4 | WASM + GitHub Pages playground | Preloaded small-rung certificates check in-browser. **Gate met; not published.** *Built 2026-08-14, build order steps 2 to 7 of [TDD part 5](TDD.md#part-5--milestone-4-the-playground). The module is **73,165 bytes**, imports nothing at all, and agrees with the native checker on **all 67 committed pairs** and all three verdicts; the A217058 a(4) rung checks in **8.4 MB and 0.85 s**. Five preloaded examples run in headless Chrome on every push, verdicts read out of the DOM and compared against the CLI's, with every network request recorded and every one on the page's own origin. The export boundary lives in a second crate so `refute` keeps `unsafe_code = "forbid"`. **Publishing is the owner's**: the Pages workflow is `workflow_dispatch` only, and no phone has been measured* |
 | 5 | Benchmarks table in README | Like-for-like pipeline comparison, methodology stated |
 
 ## Open questions
@@ -169,7 +169,7 @@ All three were answered by the owner on 2026-08-13.
    "no personal name" proposal read the privacy rule more broadly than it is
    written; the public name is public.
 3. **Playground certificate set (M4).** **Answered, and the answer names an
-   artefact that cannot be built — see TDD part 5, open question 2.** A217236
+   artefact that cannot be built ï¿½ see TDD part 5, open question 2.** A217236
    has no published a(4), so there is no refutation of it to certify (its list
    is `[55, 71, 75, 79]`), and that family's largest real rung, a(3) at n=79,
    was built to check: **521 MB** of DRAT. The ~2.5 MB certificate the answer

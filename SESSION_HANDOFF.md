@@ -1,21 +1,148 @@
 # Session handoff
 
-**State:** milestones 1, 1b, 2 and **3** are on `main` (`294df83`), 151 tests
-green on stable and on 1.74.0 in both profiles, CI green on all five jobs.
-Nothing is in flight.
+**State:** milestones 1, 1b, 2 and 3 are on `main` (`b858bd8`). **Milestone 4 is
+built but not merged and not published**: nine commits on
+`feat/milestone-4`, head `4530feb`, pushed, CI green on all eight jobs
+(run 31825567727). 165 tests pass on stable 1.97.1 and on 1.74.0.
 
-*This paragraph was wrong twice, in the same direction both times, because it
-kept being written before the merge instead of after it. It is now written
-after: `294df83` is the merge commit, and `git log` is the only source for
-this line.*
+*This paragraph is written from `git log`, after the fact, because the
+equivalent paragraph was wrong twice in earlier milestones and in the same
+direction both times — written before the merge instead of after it. There is
+no merge yet, and this says so.*
 
 ## Exact next step
 
-**Nothing is owed.** Milestone 4 — the WASM playground — is designed in
-`docs/PRD.md` and `docs/APP_FLOW.md` part 2 and has no TDD part yet, so the
-next piece of work is to write one, measurement-first, the way part 4 was.
-Three questions below want the owner before that starts; the first of them
-sets a number milestone 4 inherits.
+**Two things are owed, and both are the owner's.**
+
+1. **Merge `feat/milestone-4` into `main`.** Nothing on the branch touches the
+   checker crate, so no CLI verdict can move. It is a workspace, a second
+   crate, a page, three harnesses and four documents.
+2. **Then decide whether to publish**, which is a separate act and deliberately
+   so. See "What publishing needs" below.
+
+Nothing is in flight and nothing is half-done. The build order's steps 8 and 9
+were absorbed into CI; step 10 is the publishing decision.
+
+## What milestone 4 built, in one line each
+
+- **`wasm/`, a second crate.** `unsafe_code = "forbid"` in the checker blocks
+  every WebAssembly export form — measured, all three — so the export boundary
+  moved one crate away rather than the lint being weakened. `refute` is not
+  edited at all. The wrapper has **zero `unsafe` blocks**, and the wrapper's own
+  manifest still says `deny`, lifted one item at a time on the three exports.
+- **Three exports and no imports.** 73,165 bytes. A module that imports nothing
+  cannot call out, which is the mechanism behind the page's privacy claim rather
+  than a promise about it.
+- **A 32 MiB refusal per input**, taken with the file size in hand: one byte
+  over allocates nothing at all and returns a code that is not a verdict.
+- **A page.** One HTML file, one stylesheet, two scripts, no framework, no
+  dependency, no request off its own origin. Five preloaded examples, all
+  committed fixtures, covering all three verdicts.
+- **Three harnesses, all in CI.** `wasm_shape.mjs` on the artefact's doors,
+  `wasm_agreement.mjs` on 67 pairs against the native binary, and
+  `browser_check.mjs` driving headless Chrome against the built artefact.
+
+## The three things worth carrying forward
+
+1. **Every defect this milestone found was in the checking, not the checked.**
+   A trust-boundary guard that passed while reading the manifest comment
+   explaining the rule it guards. A shape check that asserted an exact export
+   set and went red on the MSRV toolchain over two linker globals. A browser
+   check that reported "every request stayed on this origin" while never seeing
+   the worker's requests — including the module's own fetch, the largest thing
+   the page loads. And a browser check that could not exit. None of these would
+   have been found by reading; all four came from running the thing.
+2. **The page reported `NOT VERIFIED` for a file it never fetched.**
+   `fetch(...).arrayBuffer()` on a 404 hands back the error page's body, which
+   the checker read as an unparseable formula. Found within a minute of pointing
+   the browser check at a stale `dist/`. It says *Example not available* now.
+   The rule the whole project runs on — never report a verdict about something
+   that was not checked — turns out to need restating in every new medium.
+3. **Two measurements were nearly wrong in a document.** Two toolchains
+   reported an identical module size because cargo considered the artefact
+   fresh; forcing a rebuild shows 72,822 against 73,632. And W8's first version
+   compared 1.2 MB against 1.1 MB and called it evidence for the
+   one-instance-per-check rule; with a realistic first check it is 17.3 MB
+   against 1.1 MB.
+
+## Verified on this machine and in CI
+
+- `cargo test --workspace --no-fail-fast` — **165 passed, 0 failed**, on stable
+  1.97.1 and on 1.74.0. 151 existing, plus three trust-boundary guards and
+  eleven wrapper tests.
+- `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo fmt --all --check` — clean.
+- `node tools/wasm_shape.mjs` — three exported functions, `memory`, **no
+  imports**. Reproduced identically on Linux in CI.
+- `node tools/wasm_agreement.mjs` — **67 pairs, every one agreeing**, all three
+  verdicts seen, on both toolchains. With
+  `--extra <a dir from MathRecords/vdw/drat_certify.py --seq A217058 --rung 4>`:
+  the 2,508,578-byte a(4) rung verifies in **8.4 MB and 0.85 s**, which
+  reproduces the design probe's figure exactly.
+- `node tools/browser_check.mjs --root dist` — five examples, verdicts read out
+  of the DOM and equal to the CLI's; every request on the page's own origin,
+  worker targets attached. Green locally on Edge 151 and in CI on Chrome.
+- CI run **31825567727**: `lint`, `test` on four legs, `wasm` on two, `page`.
+  Eight jobs, all green, 1m47s.
+
+## What publishing needs, and why it is not automatic
+
+Publishing a page that gives verdicts is the one irreversible act in this
+milestone. A page that reports a verdict the checker did not give discredits
+every verdict this project has produced, and taking it down does not unsay it.
+So the Pages workflow is **`workflow_dispatch` only** — a merge to `main` does
+not deploy — and the deploy job cannot start unless the build job's shape check,
+agreement harness, artefact build and browser check have all passed.
+
+Before the first run:
+
+1. **Enable Pages** in the repository settings with "GitHub Actions" as the
+   source. A settings change, and the owner's.
+2. **Measure a phone.** Rollback step 2's desktop half is automated and green;
+   no phone has been measured, and TDD part 5's open question 1 — whether 32 MB
+   is the right refusal — should be answered after that rather than before.
+3. Then run the workflow from the Actions tab, and **then** link the page from
+   the README. It is not linked now, deliberately.
+
+## Still open, and needing the owner
+
+1. **Is 32 MB of proof the right refusal?** TDD part 5, question 1. Answer it
+   after a phone has been measured. **Blocks calling the milestone done, not
+   merging it.**
+2. **Which certificate does the page preload?** TDD part 5, question 2, which
+   the design session already re-answered with evidence: the PRD names the
+   A217236 a(4) rung, and **A217236 has no published a(4)** — that family's
+   largest real rung is 521 MB. The page currently preloads five committed
+   fixtures including a real A217058 n=21 certificate. The remaining decision is
+   whether the 2.5 MB A217058 a(4) rung gets committed under the page's examples
+   so it can be preloaded too. Saying yes costs one `--keep` run; saying no
+   costs nothing.
+3. **Does the `.wasm` get committed?** TDD part 5, question 3. Built in the
+   workflow, as proposed, and the build command is in the README. One commit
+   either way.
+4. **Does the page get the rejection detail next?** TDD part 5, question 4.
+   Answered as proposed: the module returns a verdict and nothing else, the page
+   shows a verdict and nothing else, and its footer says so. The failing step,
+   line and reason are milestone 4's second commit whenever it is wanted.
+5. Milestone 3's three questions are unchanged — the 64 MB native budget, the
+   rung ladder as a documented local gate, and `store_bytes` on the LRAT path.
+   Part 5 answered the first one's *browser* half by measurement: 64 MB is the
+   right native budget and the wrong browser one, because a page holds the whole
+   proof and the CLI streams it.
+
+## Not verified
+
+- **Any phone.** The largest thing measured in a browser is the a(4) rung at
+  8.4 MB, on a desktop.
+- **Any browser that is not Chromium.** Edge 151 locally, Chrome in CI. Firefox
+  and Safari are unmeasured, and the page uses nothing exotic, which is an
+  argument rather than evidence.
+- **The published page**, because there is not one.
+
+---
+
+Nothing below this line is owed; everything below it is the milestone-3 record,
+kept as written.
 
 ## What milestone 3 did, in one line each
 
