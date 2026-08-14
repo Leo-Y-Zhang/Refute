@@ -81,12 +81,27 @@ $exe = $args[1]
 $rest = @()
 if ($args.Count -gt 2) { $rest = $args[2..($args.Count - 1)] }
 $watch = [Diagnostics.Stopwatch]::StartNew()
-if ($rest.Count -gt 0) {
-    $p = Start-Process -FilePath $exe -ArgumentList $rest -PassThru -NoNewWindow `
-        -RedirectStandardOutput $out -RedirectStandardError "$out.err"
-} else {
-    $p = Start-Process -FilePath $exe -PassThru -NoNewWindow `
-        -RedirectStandardOutput $out -RedirectStandardError "$out.err"
+try {
+    if ($rest.Count -gt 0) {
+        $p = Start-Process -FilePath $exe -ArgumentList $rest -PassThru -NoNewWindow `
+            -RedirectStandardOutput $out -RedirectStandardError "$out.err"
+    } else {
+        $p = Start-Process -FilePath $exe -PassThru -NoNewWindow `
+            -RedirectStandardOutput $out -RedirectStandardError "$out.err"
+    }
+} catch {
+    $p = $null
+}
+# A process that would not start is reported, never waited on. Without this
+# the poll below is `while (-not $null.HasExited)`, which is `while (-not
+# $null)`, which is `while ($true)`: the harness hangs for ever instead of
+# saying it could not run the thing it was asked to measure. Measured, by
+# pointing it at an empty path.
+if (-not $p) {
+    # Both figures are "-", not zero: a run that never happened took no time
+    # and used no memory, and printing 0.00 s for it says the opposite.
+    "- - 127"
+    exit 0
 }
 # Cache the handle before the process can exit. Without this the object
 # reports an empty exit code however long it is waited on -- measured, both
@@ -189,13 +204,19 @@ EOF
         status=1
     fi
 
-    read -r their_peak their_secs their_code <<EOF
+    # Guarded before the call and not after it. The yardstick is optional --
+    # the refute columns are the point of the table -- and asking the
+    # measurement helper to start a program with no name is how the whole
+    # harness hung for a reader who had not set DRAT_TRIM.
+    their_peak="-"
+    their_secs="-"
+    if [ -n "$drat_trim" ]; then
+        read -r their_peak their_secs their_code <<EOF
 $(measure "$drat_trim" "$cnf" "$proof" -f)
 EOF
-    if [ -z "${drat_trim:-}" ]; then
-        their_secs="-"; their_peak="-"
-    elif [ "$their_code" != "0" ]; then
-        echo "$name: drat-trim -f exited $their_code" >&2
+        if [ "$their_code" != "0" ]; then
+            echo "$name: drat-trim -f exited $their_code" >&2
+        fi
     fi
 
     printf '%-18s %12s %10s %10s %8s %9s %8s %9s\n' \
