@@ -35,6 +35,13 @@ Locations are never written into a tracked file:
 
 Deterministic. `--seed S --cases N` is reproducible, and any single case is
 reproducible on its own with `--case K`.
+
+`--force-compaction` runs Refute with its arena compaction floor at zero.
+Milestone 3 made the clause store reclaim what it holds, and the whole safety
+claim for that is that it changes what is held and nothing that is decided --
+which is exactly what this harness is shaped to test. Without the flag the
+random proofs are too small and delete too little to reach the new code at all,
+so the gate is re-run under it rather than quoted from before.
 """
 import argparse
 import os
@@ -165,8 +172,8 @@ def mutants(rng, steps):
     return out
 
 
-def verdict(binary, cnf, proof, forward=False):
-    args = [binary, cnf, proof] + (["-f"] if forward else [])
+def verdict(binary, cnf, proof, forward=False, extra=()):
+    args = [binary, cnf, proof] + (["-f"] if forward else []) + list(extra)
     result = subprocess.run(args, capture_output=True, text=True)
     for line in result.stdout.splitlines():
         if line.startswith("s VERIFIED"):
@@ -186,7 +193,8 @@ class Run:
 
     def compare(self, case, kind, cnf, proof):
         """One comparison. Returns False on a hard failure."""
-        ours, stderr = verdict(self.args.refute, cnf, proof)
+        ours, stderr = verdict(self.args.refute, cnf, proof,
+                               extra=self.args.refute_flags)
         theirs, _ = verdict(self.args.drat_trim, cnf, proof, forward=True)
         self.checked += 1
 
@@ -222,11 +230,20 @@ def main():
     parser.add_argument("--drat-trim", dest="drat_trim",
                         default=os.environ.get("DRAT_TRIM"))
     parser.add_argument("--refute", default=os.environ.get("REFUTE"))
+    parser.add_argument("--force-compaction", action="store_true",
+                        help="run refute with max_dead_arena_lits = 0, so "
+                             "that the arena compacts as soon as its dead "
+                             "half is the larger one")
     args = parser.parse_args()
     for name in ("kissat", "drat_trim", "refute"):
         if not getattr(args, name):
             sys.exit("set KISSAT, DRAT_TRIM and REFUTE, or pass --%s"
                      % name.replace("_", "-"))
+    # Random proofs are small and delete little, so at the default floor of
+    # 1,024 dead literals almost none of them reach the reclamation code that
+    # milestone 3 added -- and a harness that never enters the code it is
+    # guarding reports the same summary whether that code works or not.
+    args.refute_flags = ["--max-dead-arena-lits=0"] if args.force_compaction else []
 
     cases = [args.case] if args.case is not None else range(args.cases)
     ran = 0
@@ -294,6 +311,8 @@ def main():
 
     # Cases RUN, not cases asked for: the loop stops at the first hard
     # failure, and reporting the request would overstate the evidence.
+    print("refute flags    %s"
+          % (" ".join(args.refute_flags) if args.refute_flags else "(none)"))
     print("cases           %d (%d unsatisfiable, %d satisfiable)"
           % (ran, unsat_seen, sat_seen))
     print("comparisons     %d" % run.checked)

@@ -287,12 +287,38 @@ fn the_candidate_queries_report_the_entries_they_filtered() {
 /// compaction, and a control written afterwards proves nothing about it.
 #[test]
 fn b37_a_proof_with_no_deletions_never_compacts() {
-    let outcome = common::outcome("tiny_unsat.cnf", "tiny_unsat.drat");
-    assert_eq!(outcome.verdict, Verdict::Verified);
-    assert_eq!(outcome.stats.deletions, 0, "the fixture began deleting");
-    assert_eq!(
-        outcome.stats.compactions, 0,
-        "a proof that deletes nothing compacted an arena with nothing dead in it"
+    // The second pair is the one the mutation pass asked for. `tiny_unsat`
+    // has no deletions and no RAT step either, so it says nothing about
+    // *where* compaction is reachable from; `d09` has no deletions and 24 RAT
+    // candidates, so a compaction called from the candidate loop shows up
+    // here and nowhere else. That mutation killed nothing until this line
+    // existed, and the design calls the trail-empty precondition
+    // load-bearing.
+    for (cnf, proof) in [
+        ("tiny_unsat.cnf", "tiny_unsat.drat"),
+        (
+            "d09_trail_leak_between_candidates.cnf",
+            "d09_trail_leak_between_candidates.drat",
+        ),
+    ] {
+        for (limits, floor) in [(Limits::default(), "default"), (forced(), "forced")] {
+            let stats = common::outcome_with_limits(cnf, proof, &limits).stats;
+            assert_eq!(stats.deletions, 0, "{proof} began deleting");
+            assert_eq!(
+                stats.compactions, 0,
+                "{proof} at the {floor} floor compacted an arena with nothing dead in it"
+            );
+        }
+    }
+    // Not a scene-setter: without a RAT step there is no candidate loop for a
+    // compaction to be misplaced into.
+    let rat = common::outcome(
+        "d09_trail_leak_between_candidates.cnf",
+        "d09_trail_leak_between_candidates.drat",
+    );
+    assert!(
+        rat.stats.rat_candidates_checked > 0,
+        "the fixture stopped exercising the candidate loop"
     );
 }
 
