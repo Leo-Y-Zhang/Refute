@@ -106,7 +106,49 @@ if [ "$(head -c 1 "$fixtures/b17_binary_proof.lrat")" != "a" ]; then
 fi
 echo "captured b17_binary_proof.lrat (64 bytes of binary DRAT)"
 
-python3 "$root/tools/mutate.py" --fixtures "$fixtures" --kissat "$kissat"
+# Milestone 2: the raw solver output, for the checker that reads it directly.
+#
+# Only four instances get one. The corpus has a 500 KB budget and random_unsat
+# alone is 79 KB in DRAT form, against 21 KB in LRAT: drat-trim's trimming is
+# most of what makes the committed corpus small. The four kept are the ones the
+# two-checker agreement test needs -- every name that has both a .lrat and a
+# .drat is checked twice, by two readers and two checkers, on committed bytes
+# and with no binary in CI.
+#
+# Normalised to LF here rather than by .gitattributes: kissat writes the
+# platform's line endings, and the CRLF fixture below is the one file whose
+# bytes are the point of it.
+for name in tiny_unsat deletes_originals real_rat_proof rat_pigeonhole; do
+    cnf="$fixtures/$name.cnf"
+    "$kissat" --no-binary -q "$cnf" "$work/$name.raw" && rc=$? || rc=$?
+    if [ "$rc" -ne 20 ]; then
+        echo "$name: kissat did not report UNSATISFIABLE (exit $rc)" >&2
+        exit 1
+    fi
+    tr -d '\r' < "$work/$name.raw" > "$fixtures/$name.drat"
+    # Forward, never the default. Backward checking only checks the lemmas it
+    # keeps, so it is not an oracle for a forward checker.
+    if ! "$drat_trim" "$cnf" "$fixtures/$name.drat" -f | grep -q '^s VERIFIED'; then
+        echo "$name: drat-trim -f did not verify the raw proof" >&2
+        exit 1
+    fi
+    echo "generated $name.drat"
+done
+
+# B29: the same solver output with its line endings left alone. Generated on
+# Windows, so it is CRLF throughout, which is what a reader on this platform
+# will hand the tool. It pairs with tiny_unsat.cnf; only the proof's bytes are
+# under test. The CI job greps this file for a carriage return, because a
+# checkout that translated it would leave the test passing and testing nothing.
+cp "$work/tiny_unsat.raw" "$fixtures/b30_crlf.drat"
+if ! grep -qU $'\r' "$fixtures/b30_crlf.drat"; then
+    echo "b30_crlf.drat: kissat wrote LF, so this fixture tests nothing" >&2
+    exit 1
+fi
+echo "captured b30_crlf.drat (CRLF, $(wc -c < "$fixtures/b30_crlf.drat") bytes)"
+
+python3 "$root/tools/mutate.py" --fixtures "$fixtures" --kissat "$kissat" \
+    --drat-trim "$drat_trim"
 
 # Independent check of the one formula edited by hand: the same lemma sequence
 # in DRAT form, verified by drat-trim against the edited formula. The lemmas are

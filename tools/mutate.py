@@ -34,7 +34,14 @@ why in a comment at its construction site:
                       drat-trim in DRAT form as well, because it is a valid
                       proof that Refute rejects on strictness alone.
 
-Usage: mutate.py --fixtures DIR [--kissat PATH]
+Milestone 2 adds a DRAT section at the end. Its mutants are chosen by search
+rather than by hand: `drat-trim -f` is run on every candidate and the first --
+or last, where the fixture wants a later step -- that it rejects is the one
+kept. That is not fussiness. Of 24 single-literal mutations of two real proofs
+measured for docs/TDD.md part 3, five remain valid proofs, and a fixture named
+"rejected" that is not rejected is a test asserting the opposite of its name.
+
+Usage: mutate.py --fixtures DIR [--kissat PATH] [--drat-trim PATH]
 """
 import argparse
 import os
@@ -240,9 +247,15 @@ def build_taut_lemma(out, base_cnf, base_lrat):
 
 
 def build_empty_clause_in_cnf(out):
-    """P4. A formula that already contains the empty clause, refuted in one step."""
+    """P4 and P18. A formula that already contains the empty clause.
+
+    Refuted in one step, and the DRAT form of that step is the shortest proof
+    there is: two bytes. It is also the only route to the store's empty-clause
+    counter, since no solver is ever handed a formula this trivial.
+    """
     write(os.path.join(out, "empty_clause_in_cnf.cnf"), "p cnf 2 3\n1 0\n-1 2 0\n0\n")
     write(os.path.join(out, "empty_clause_in_cnf.lrat"), "4 0 3 0\n")
+    write(os.path.join(out, "empty_clause_in_cnf.drat"), "0\n")
 
 
 def build_duplicate_literal(out, base_cnf, base_lrat):
@@ -732,10 +745,248 @@ def build_hostile_escapes(out, tiny_cnf_path, tiny_lrat_path):
     write(os.path.join(out, "hostile_escape_proof.lrat"), payload + " 0 0\n")
 
 
+# -------------------------------------------------------------- DRAT model
+#
+# A DRAT step is a clause and nothing else: `d` opens a deletion, everything
+# else is an addition, and there is no identifier to keep in step with. The
+# model below is therefore a list of (kind, literals) and no more, which is the
+# whole reason milestone 2's mutations are shorter than milestone 1's.
+
+
+def parse_drat(text):
+    """Returns a list of ('a', lits) and ('d', lits) records, in file order."""
+    steps = []
+    for raw in text.splitlines():
+        tokens = raw.split()
+        if not tokens:
+            continue
+        if tokens[0] == "d":
+            steps.append((DELETE, [int(t) for t in tokens[1:-1]]))
+        else:
+            steps.append((ADD, [int(t) for t in tokens[:-1]]))
+    return steps
+
+
+def render_drat(steps):
+    out = []
+    for kind, lits in steps:
+        head = ["d"] if kind == DELETE else []
+        out.append(" ".join(head + [str(lit) for lit in lits] + ["0"]))
+    return "\n".join(out) + "\n"
+
+
+def drat_additions(steps):
+    return [i for i, s in enumerate(steps) if s[0] == ADD]
+
+
+def drat_rejects(drat_trim, cnf_path, steps, scratch):
+    """True when `drat-trim -f` does not verify these steps.
+
+    Forward mode, never the default. Backward checking only checks the lemmas
+    it keeps, so it verifies mutants a forward checker rejects -- measured at 1
+    of 24 for docs/TDD.md part 3 -- and is not a valid oracle for a forward
+    checker.
+    """
+    with open(scratch, "w", newline="\n") as handle:
+        handle.write(render_drat(steps))
+    result = subprocess.run(
+        [drat_trim, cnf_path, scratch, "-f"], capture_output=True, text=True
+    )
+    return not any(l.startswith("s VERIFIED") for l in result.stdout.splitlines())
+
+
+# ---------------------------------------------------------- DRAT negatives
+
+
+def build_drat_negatives(out, base_name, drat_trim, kissat):
+    """D1-D8: one committed mutant per class tools/fuzz.py generates.
+
+    CI has no binaries, so the classes are exercised on every commit by these
+    fixed mutants rather than by the fuzzer.
+
+    Three of the eight are not put to drat-trim, because for them rejection is
+    a theorem rather than an observation: a truncated proof and a proof with no
+    empty clause derived nothing, and a formula with a model has no refutation.
+    D7 is the reason that distinction is written down -- `drat-trim -f` reports
+    `s VERIFIED` on the proof with its final `0` line removed, because it adds
+    the empty clause itself once the formula propagates to a conflict. Refute
+    rejects it. That is Refute being stricter in the only safe direction, and a
+    harness that demanded agreement here would be asserting the wrong thing.
+    """
+    if not drat_trim:
+        sys.exit("D1-D6 need --drat-trim: each mutant's rejection is its verdict")
+    cnf_path = os.path.join(out, base_name + ".cnf")
+    steps = parse_drat(read(os.path.join(out, base_name + ".drat")))
+    adds = drat_additions(steps)
+    scratch = os.path.join(out, ".probe.drat")
+    rejects = lambda mutant: drat_rejects(drat_trim, cnf_path, mutant, scratch)
+
+    def emit(tag, mutant):
+        write(os.path.join(out, tag + ".drat"), render_drat(mutant))
+
+    def dropped(index):
+        return steps[:index] + steps[index + 1:]
+
+    # D1: the first addition dropped. Every later step that propagated through
+    # it loses its reason, so the failure is early and unambiguous.
+    assert rejects(dropped(adds[0])), "dropping the first addition still verifies"
+    emit("d01_addition_dropped", dropped(adds[0]))
+
+    # D2: the *last* addition whose removal breaks the proof. Later than D1 by
+    # construction, so the rejection happens against a database that has been
+    # added to and deleted from for the whole proof rather than against the
+    # formula alone. 66 of the 91 additions qualify on the 5x4 proof; taking
+    # the last is what makes this a different test from D1 rather than a second
+    # copy of it.
+    late = [i for i in adds if rejects(dropped(i))]
+    assert late, "no addition of this proof is load-bearing"
+    emit("d02_needed_addition_dropped", dropped(late[-1]))
+
+    # D3: one literal of one addition flipped. Searched, not chosen: five of 24
+    # single-literal mutants measured for part 3 are still valid proofs,
+    # because the flip landed in a lemma nothing later depends on.
+    flipped = None
+    for index in adds:
+        lits = steps[index][1]
+        if not lits:
+            continue
+        mutant = list(steps)
+        mutant[index] = (ADD, [-lits[0]] + lits[1:])
+        if rejects(mutant):
+            flipped = mutant
+            break
+    assert flipped, "no single flip of a first literal breaks this proof"
+    emit("d03_literal_flipped", flipped)
+
+    # D4: two adjacent additions transposed. Also searched -- transposing the
+    # first two of the 5x4 proof leaves a proof drat-trim verifies, because
+    # neither depends on the other.
+    swapped = None
+    for first, second in zip(adds, adds[1:]):
+        mutant = list(steps)
+        mutant[first], mutant[second] = mutant[second], mutant[first]
+        if rejects(mutant):
+            swapped = mutant
+            break
+    assert swapped, "no adjacent transposition breaks this proof"
+    emit("d04_additions_swapped", swapped)
+
+    # D5: a deletion inserted for a clause a later step needs. The lemma is
+    # deleted on the line after it is added, so the database is missing a
+    # clause every later step was written against.
+    deleted = None
+    for index in adds:
+        mutant = steps[:index + 1] + [(DELETE, steps[index][1])] + steps[index + 1:]
+        if rejects(mutant):
+            deleted = mutant
+            break
+    assert deleted, "no deleted-then-used mutation breaks this proof"
+    emit("d05_deleted_then_used", deleted)
+
+    # D6: truncated to its first half. Nothing was derived, so rejection is a
+    # theorem; drat-trim agrees, and is asked anyway because it costs nothing.
+    truncated = steps[: len(steps) // 2]
+    assert rejects(truncated), "a truncated proof verified"
+    emit("d06_truncated", truncated)
+
+    # D7: the final empty clause removed. NOT put to drat-trim: see the note in
+    # this function's docstring. Rejection is a theorem.
+    assert steps[-1] == (ADD, []), "the proof does not end with the empty clause"
+    emit("d07_no_empty_clause", steps[:-1])
+
+    # D8: the real proof against a SATISFIABLE formula. The control that
+    # matters most, and the one class where `s VERIFIED` is a defect whatever
+    # any other checker says. kissat is asked, so the claim is a solver's.
+    sat_cnf = find_satisfiable_variant(read(cnf_path), kissat, out)
+    write(os.path.join(out, "d08_satisfiable_formula.cnf"), sat_cnf)
+    emit("d08_satisfiable_formula", steps)
+
+    os.remove(scratch)
+
+
+def build_drat_hand_built(out, kissat):
+    """D9 and D10: two false accepts no mutation of a real proof can produce.
+
+    Both formulas are SATISFIABLE, so `s VERIFIED` on either is a false accept
+    and not a strictness disagreement. kissat is run on each during generation,
+    so that is a solver's claim rather than mine.
+
+    Shared skeleton. F holds (-1 2) and (-1 -2), so F with (1) added is
+    unsatisfiable and the empty clause follows by propagation -- but F itself
+    has the model {1 false, 2 true}. The lemma (1) is not RAT on pivot 1: the
+    candidate (-1 -2) resolves to (1 -2), whose negation assigns 2, and nothing
+    then conflicts. Everything else in each formula exists to make one specific
+    checker bug accept it.
+    """
+    if not kissat:
+        sys.exit("D9-D10 need --kissat: each fixture states its formula is satisfiable")
+
+    # D9. The trail leak between candidates -- the rule milestone 1b shipped
+    # with no test on it, reproduced deliberately on the DRAT path where there
+    # is no file to disagree with.
+    #
+    #   1: (-1 2)   2: (-1 -2)   3: (2 3)   4: (2 -3)
+    #
+    # Candidate 1 is (-1 2): the resolvent (1 2) is negated to -2, which
+    # propagates 3 from clause 3 and conflicts on clause 4. Two assignments are
+    # left on the trail. Candidate 2 is (-1 -2): from the base trail its
+    # resolvent (1 -2) assigns 2 and nothing conflicts, so the lemma is not RAT
+    # and the proof is rejected. A checker that does not unwind to base sees -2
+    # still true, calls the second resolvent refuted by its own negation, and
+    # accepts. So does a checker that stops at the first candidate that passes.
+    d09_cnf = "p cnf 3 4\n-1 2 0\n-1 -2 0\n2 3 0\n2 -3 0\n"
+    d09_drat = "1 0\n0\n"
+
+    # D10. Deletion by literals must remove exactly one copy. Clause (-1 -2) is
+    # written twice, and the proof deletes it once. With one copy still live
+    # the lemma (1) is rejected exactly as in D9; with both copies gone the
+    # only candidate left is (-1 2), whose resolvent does conflict, so the
+    # lemma is accepted and the empty clause follows. 39 additions of the
+    # A217058 a(4) certificate duplicate a live clause, so this is a real
+    # shape and not a contrived one.
+    d10_cnf = "p cnf 3 5\n-1 2 0\n-1 -2 0\n-1 -2 0\n2 3 0\n2 -3 0\n"
+    d10_drat = "d -1 -2 0\n1 0\n0\n"
+
+    for tag, cnf_text, drat_text in [
+        ("d09_trail_leak_between_candidates", d09_cnf, d09_drat),
+        ("d10_duplicate_clause_deleted_once", d10_cnf, d10_drat),
+    ]:
+        cnf_path = os.path.join(out, tag + ".cnf")
+        write(cnf_path, cnf_text)
+        write(os.path.join(out, tag + ".drat"), drat_text)
+        result = subprocess.run([kissat, "-q", cnf_path], capture_output=True, text=True)
+        if result.returncode != 10:
+            sys.exit("%s: kissat exited %d, expected 10 (SATISFIABLE)"
+                     % (tag, result.returncode))
+        print("%s: kissat says SATISFIABLE" % tag)
+
+
+def build_drat_boundaries(out, base_name):
+    """B28's fixture: a real proof whose first line is a deletion.
+
+    Milestone 1b's binary sniff reads a first byte of `a` or `d` as a binary
+    proof, which was exactly right while LRAT was the only text format -- a
+    text LRAT line begins with a decimal identifier. A text DRAT deletion line
+    begins `d `, so under that rule this perfectly good text file is reported
+    as binary and never read. The widened rule looks for a NUL byte, and for
+    `a` or `d` that is not followed by a space or a tab.
+
+    Every addition before the first deletion is dropped, so the file leads with
+    a `d` line. What is left is not a proof of anything and is not meant to be:
+    the fixture's whole job is to be recognised as text DRAT.
+    """
+    steps = parse_drat(read(os.path.join(out, base_name + ".drat")))
+    first_delete = next(i for i, s in enumerate(steps) if s[0] == DELETE)
+    assert first_delete > 0, "this proof already begins with a deletion"
+    write(os.path.join(out, "b29_deletion_first.drat"), render_drat(steps[first_delete:]))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixtures", required=True)
     parser.add_argument("--kissat", default=os.environ.get("KISSAT"))
+    parser.add_argument("--drat-trim", dest="drat_trim",
+                        default=os.environ.get("DRAT_TRIM"))
     args = parser.parse_args()
     out = args.fixtures
 
@@ -759,6 +1010,9 @@ def main():
     build_hostile_escapes(out,
                           os.path.join(out, "tiny_unsat.cnf"),
                           os.path.join(out, "tiny_unsat.lrat"))
+    build_drat_negatives(out, "real_rat_proof", args.drat_trim, args.kissat)
+    build_drat_hand_built(out, args.kissat)
+    build_drat_boundaries(out, "real_rat_proof")
 
 
 if __name__ == "__main__":

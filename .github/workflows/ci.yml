@@ -60,10 +60,12 @@ jobs:
       # Fixtures are byte-exact evidence. If a checkout ever translates their
       # line endings, b08_crlf silently stops testing CRLF and starts testing
       # whatever the platform produced. This is the check that says so.
-      - name: The CRLF fixture still contains CRLF
+      - name: The CRLF fixtures still contain CRLF
         shell: bash
         run: |
-          if ! grep -qU $'\r' tests/fixtures/b08_crlf.lrat; then
-            echo "b08_crlf.lrat has lost its CRLF line endings" >&2
-            exit 1
-          fi
+          for fixture in tests/fixtures/b08_crlf.lrat tests/fixtures/b30_crlf.drat; do
+            if ! grep -qU $'\r' "$fixture"; then
+              echo "$fixture has lost its CRLF line endings" >&2
+              exit 1
+            fi
+          done
