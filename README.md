@@ -1,7 +1,7 @@
 # Refute
 
-An independent forward checker for LRAT unsatisfiability proofs, in Rust, with
-no dependencies.
+An independent forward checker for DRAT and LRAT unsatisfiability proofs, in
+Rust, with no dependencies.
 
 A SAT solver answering UNSAT is an assertion, not a proof. Refute exists to be a
 second opinion on the certificate — written separately from `drat-trim`, so that
@@ -9,11 +9,22 @@ a soundness bug in one is not a soundness bug in both.
 
 ## Read this before using it
 
-**Refute checks every addition line a text `drat-trim -L` file contains.** That
-means RUP steps with hints, RAT steps with resolvent blocks, and the empty hint
-list — which is not an absence but a claim, that the lemma's pivot has no
-resolution candidate, and which Refute accepts only after establishing that for
-itself from its own clause database.
+**Refute checks two formats.** Text DRAT, as a solver writes it, with no hints
+at all: every addition is checked by unit propagation from the live database,
+and a step that is not RUP is checked as RAT against a candidate set Refute
+builds itself. And text LRAT, as `drat-trim -L` writes it: RUP steps with
+hints, RAT steps with resolvent blocks, and the empty hint list — which is not
+an absence but a claim, that the lemma's pivot has no resolution candidate, and
+which Refute accepts only after establishing that for itself.
+
+The format is detected from the head of the proof, and the two grammars are
+disjoint on every file in the corpus. Nothing is guessed silently: `--drat` and
+`--lrat` force the choice, and a file forced into the wrong reader is rejected
+rather than reinterpreted.
+
+**Checking DRAT directly is what takes `drat-trim` out of the trust chain.**
+Against an LRAT file, `drat-trim` is still the producer even when it is not the
+checker. Against the raw proof the solver wrote, it is neither.
 
 Milestone 1 checked the RUP steps alone, which on a measured pigeonhole 8x7
 proof was 96 % of addition lines and, in practice, nothing: the first line it
@@ -21,21 +32,36 @@ could not check arrived on line 2 of almost every real file. Milestone 1b closed
 that. The evidence is a differential run against `drat-trim` on proofs too large
 to commit, most recently:
 
-| instance | LRAT | `drat-trim` | `refute` |
-|---|---:|---|---|
-| pigeonhole 4x3 to 7x6 | 1.4 KB to 55 KB | `s VERIFIED` | `s VERIFIED` |
-| pigeonhole 8x7 | 386 KB | `s VERIFIED` | `s VERIFIED` |
-| 3 random 3-SAT refutations | 7 KB to 97 KB | `s VERIFIED` | `s VERIFIED` |
-| a mixed van der Waerden certificate, n=21 | 42 KB | `s VERIFIED` | `s VERIFIED` |
-| the same family, n=25 | 257 KB | `s VERIFIED` | `s VERIFIED` |
+| instance | raw DRAT | LRAT | `drat-trim -f` vs `refute` | `drat-trim -L` vs `refute` |
+|---|---:|---:|---|---|
+| pigeonhole 4x3 | 1.6 KB | 1.4 KB | both `s VERIFIED` | both `s VERIFIED` |
+| pigeonhole 5x4 | 2.1 KB | 3.2 KB | both `s VERIFIED` | both `s VERIFIED` |
+| pigeonhole 6x5 | 6.4 KB | 10 KB | both `s VERIFIED` | both `s VERIFIED` |
+| pigeonhole 7x6 | 22 KB | 55 KB | both `s VERIFIED` | both `s VERIFIED` |
+| pigeonhole 8x7 | 153 KB | 386 KB | both `s VERIFIED` | both `s VERIFIED` |
+| random 3-SAT, 60 vars | 6.9 KB | 7.3 KB | both `s VERIFIED` | both `s VERIFIED` |
+| random 3-SAT, 80 vars | 79 KB | 97 KB | both `s VERIFIED` | both `s VERIFIED` |
+| random 3-SAT, 100 vars | 21 KB | 68 KB | both `s VERIFIED` | both `s VERIFIED` |
+
+The oracle is `drat-trim -f`, never its default backward mode. Backward
+checking only checks the lemmas it keeps, so it verifies mutated proofs a
+forward checker rejects, and is not a valid oracle for one.
 
 Reproduce it with `tools/differential.sh`; it needs `kissat` and `drat-trim`,
-which CI does not have. **The pigeonhole and random rows reproduce from this
-repository alone. The two van der Waerden rows do not** — their formulas are
-built by a generator in another of the author's repositories and passed in with
-`tools/differential.sh --extra <dir>`, which is how they are checked without
-this repository depending on that one. Without that directory the harness runs
-the rows above them and nothing else.
+which CI does not have, and every row above reproduces from this repository
+alone. Certificates built elsewhere go in with `--extra <dir>`, which is how
+the author's own are checked without this repository depending on another one.
+
+**On this project's own results.** The refutations behind twenty-four new terms
+of [A250026](https://oeis.org/A250026), checked from the raw proof the solver
+wrote, with `drat-trim` in the chain neither as checker nor as producer:
+
+| certificate | CNF | raw DRAT | `refute` | `drat-trim -f` |
+|---|---:|---:|---|---|
+| a(37) = 45 | 3.3 KB | 12.5 KB | `s VERIFIED` | `s VERIFIED` |
+| a(47) = 57 | 9.4 KB | 192 KB | `s VERIFIED` | `s VERIFIED` |
+| a(54) = 68 | 7.5 KB | 197 KB | `s VERIFIED` | `s VERIFIED` |
+| a(59) = 72 | 7.8 KB | 173 KB | `s VERIFIED` | `s VERIFIED` |
 
 **What is still not checked.** Binary proofs. `kissat` writes binary DRAT unless
 told `--no-binary`, and handing one to a text checker is a common mistake, so it
@@ -44,12 +70,20 @@ has its own answer rather than a parse error:
 ```
 $ refute formula.cnf proof.drat
 s UNSUPPORTED
-refute: proof line 1: this is a binary proof; refute reads text LRAT.
-Re-run kissat with --no-binary, then drat-trim with -L
+refute: proof line 1: this is a binary proof; refute reads text DRAT and text
+LRAT. Re-run kissat with --no-binary
 ```
 
-Also unchecked, and out of scope here: DRAT itself, backward checking, trimming,
-core extraction, binary LRAT, parallelism.
+Also unchecked, and out of scope here: backward checking, trimming, core
+extraction, binary LRAT, parallelism.
+
+**A variable is not free on the DRAT path.** It costs about ninety-six bytes
+there against about one on the LRAT path, because the watch and occurrence
+vectors carry a slot per literal whether anything is pushed into it or not, so
+that path stops at 2^22 variables rather than the shared 2^26. Measured peak
+working set for a proof line naming one large variable: 393 MB just under the
+ceiling, 5 MB just above it. The largest instance in this project's corpus
+declares 1,209 variables.
 
 **`s UNSUPPORTED` is not a pass.** It exits 2. A caller grepping for `VERIFIED`
 would also match `NOT VERIFIED`, so test the exit code, never the string alone.
@@ -57,8 +91,12 @@ would also match `NOT VERIFIED`, so test the exit code, never the string alone.
 ## Use
 
 ```
-refute <formula.cnf> <proof.lrat> [--stats]
+refute [check] <formula.cnf> <proof.lrat|proof.drat> [--drat|--lrat] [--stats]
 ```
+
+The format is detected from the proof, so the two positional arguments are
+usually all that is needed. `check` is optional and changes nothing; it is
+there so that a subcommand spelling does not become a breaking change later.
 
 `--help` and `--version` are answered only when one of them is the whole command
 line. Beside anything else they are a usage error and exit 3, because the exit
@@ -73,9 +111,16 @@ drat-trim formula.cnf proof.drat -L proof.lrat
 refute formula.cnf proof.lrat
 ```
 
-`drat-trim` is currently in the trust chain as the *producer* of the LRAT. It is
-not in the chain as the *checker*, which is the point. Milestone 2 checks DRAT
-directly and removes it entirely.
+On that route `drat-trim` is in the trust chain as the *producer* of the LRAT,
+though not as the *checker*, which was the point. Handing Refute the solver's
+own proof takes it out of the chain altogether:
+
+```
+kissat --no-binary formula.cnf proof.drat
+refute formula.cnf proof.drat
+```
+
+which is the route the A250026 certificates above were checked by.
 
 ### Exit codes
 
