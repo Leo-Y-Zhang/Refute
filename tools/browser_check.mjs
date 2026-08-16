@@ -470,6 +470,113 @@ for (const [id, expected, mustMention] of EXPECTED) {
 }
 
 // ---------------------------------------------------------------------------
+// A file the page will not hold.
+//
+// The module refuses an input over the ceiling and throws away whatever it was
+// holding, and `a_refusal_discards_what_was_there_before` in wasm/src/lib.rs is
+// the test that keeps it doing so: a module that kept the old bytes would
+// report VERIFIED for a file the user had already replaced. The page refuses
+// first, on size, before a worker exists at all, so it owes exactly the same
+// duty one layer up and nothing was checking that it paid it. Two things are
+// asserted here. A refused file must not leave the previous one loaded and
+// checkable, and the command the panel offers instead must name the refused
+// file in the argument position it arrived in.
+//
+// Driven as a drop rather than through the file input, because a synthetic
+// `File` can be built inside the page and a real one cannot be typed into an
+// `<input type=file>` from out here. The ceiling is read out of the page's own
+// module rather than written down again, so this is not another copy of a
+// number that already lives in two places.
+
+stage = 'checking what the page does with a file over its ceiling';
+await devtools.send('Page.navigate', { url: `${origin}/?example=tiny` });
+const loaded = await until(
+  async () =>
+    (
+      await devtools.evaluate("document.getElementById('verdict').className")
+    )?.includes('done'),
+  { timeoutMs: 30000 },
+);
+if (loaded === null) {
+  failures.push(
+    'the tiny example never reached a verdict, so there was nothing loaded ' +
+      'for a refused file to fail to replace',
+  );
+} else {
+  const ceiling = await devtools.evaluate(
+    "import('./limits.js').then((limits) => limits.MAX_INPUT_BYTES)",
+  );
+  // What the example left in the two slots, so that the command expected below
+  // is the page's own names rather than this file's memory of them.
+  const held = await devtools.evaluate(
+    "JSON.stringify(['cnf-chosen', 'proof-chosen'].map((id) => " +
+      "document.getElementById(id).innerText.split(' (')[0]))",
+  );
+  const [heldFormula, heldProof] = JSON.parse(held);
+  await devtools.evaluate(`(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File([new ArrayBuffer(${ceiling} + 1)], 'huge_formula.cnf'),
+    );
+    document.getElementById('cnf-drop').dispatchEvent(
+      new DragEvent('drop', {
+        dataTransfer: transfer,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  })()`);
+
+  const refused = await until(
+    async () =>
+      (
+        await devtools.evaluate("document.getElementById('verdict').className")
+      )?.includes('too-large')
+        ? await devtools.evaluate(
+            "JSON.stringify({ command: document.querySelector('#verdict pre code')?.innerText ?? '', " +
+              "runnable: !document.getElementById('run').disabled, " +
+              "slot: document.getElementById('cnf-chosen').innerText })",
+          )
+        : null,
+    { timeoutMs: 30000 },
+  );
+
+  console.log('');
+  if (refused === null) {
+    failures.push(
+      `a ${ceiling + 1} byte formula never produced the too-large panel`,
+    );
+  } else {
+    const { command, runnable, slot } = JSON.parse(refused);
+    console.log(`over the ceiling  ${command}`);
+    console.log(`                  Check ${runnable ? 'enabled' : 'disabled'}, formula slot reads ${JSON.stringify(slot)}`);
+    const wanted = `refute huge_formula.cnf ${heldProof}`;
+    if (command !== wanted) {
+      failures.push(
+        `the too-large panel offers ${JSON.stringify(command)} where it should ` +
+          `offer ${JSON.stringify(wanted)}. The refused file was a formula, so ` +
+          'it belongs in the formula argument; printed as the proof it is a ' +
+          'command that checks the wrong file against the wrong one.',
+      );
+    }
+    if (runnable) {
+      failures.push(
+        'a formula the page refused left the previous one loaded and Check ' +
+          'enabled, so the next click reports a verdict about a file the user ' +
+          'has already replaced.',
+      );
+    }
+    if (slot.includes(heldFormula)) {
+      failures.push(
+        `the formula slot still names ${heldFormula} after the file dropped ` +
+          'on it was refused, so the page says it is holding something it ' +
+          'will not check',
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Rollback step 3, from the protocol rather than from a screenshot.
 
 const foreign = [...new Set(requests)].filter((url) => !url.startsWith(origin));
