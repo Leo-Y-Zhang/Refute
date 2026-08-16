@@ -83,6 +83,18 @@ const dom = {
 /** The two files, as `{ name, bytes }` or null. */
 const chosen = { cnf: null, proof: null };
 
+/**
+ * What each slot's label says when nothing is in it.
+ *
+ * Read out of the markup rather than written here, so that emptying a slot
+ * restores what index.html says an empty slot reads and not what this file
+ * remembers it said.
+ */
+const EMPTY_LABEL = {
+  cnf: dom.cnfChosen.textContent,
+  proof: dom.proofChosen.textContent,
+};
+
 let worker = null;
 let ticker = null;
 
@@ -186,10 +198,20 @@ function code(text) {
   return block;
 }
 
-function renderTooLarge(name, bytes) {
+function renderTooLarge(which, name, bytes) {
   // The one failure that must not look transient. No retry button, and the
   // exact command instead.
+  //
+  // `which` is which of the two arguments the refused file was, and it is a
+  // parameter rather than an assumption because both drop zones reach here.
+  // A refused formula printed into the proof position is a command that checks
+  // the user's formula against whatever was loaded before it, which is worse
+  // than printing nothing.
   const megabytes = (bytes / (1024 * 1024)).toFixed(1);
+  const command =
+    which === 'cnf'
+      ? `refute ${name} ${chosen.proof?.name ?? 'proof.drat'}`
+      : `refute ${chosen.cnf?.name ?? 'formula.cnf'} ${name}`;
   panel(
     [
       wordLine('Too large for a browser tab', '—'),
@@ -201,7 +223,7 @@ function renderTooLarge(name, bytes) {
           'the checker can read a byte of it. The command-line tool streams ' +
           'the proof and has no such limit.',
       ),
-      code(`refute ${chosen.cnf?.name ?? 'formula.cnf'} ${name}`),
+      code(command),
     ],
     'done too-large',
   );
@@ -304,9 +326,23 @@ function setChosen(which, name, bytes) {
   dom.run.disabled = chosen.cnf === null || chosen.proof === null;
 }
 
+/** Empties one slot, so that nothing stale can be checked out of it. */
+function clearChosen(which) {
+  chosen[which] = null;
+  const label = which === 'cnf' ? dom.cnfChosen : dom.proofChosen;
+  label.textContent = EMPTY_LABEL[which];
+  dom.run.disabled = true;
+}
+
 async function takeFile(which, file) {
   if (file.size > MAX_INPUT_BYTES) {
-    renderTooLarge(file.name, file.size);
+    // Cleared before the panel is drawn, and this is the same rule the module
+    // keeps one layer down: a refusal must not leave the file it replaced
+    // checkable. Left alone, the slot still holds the previous file under the
+    // previous name, Check is still enabled, and the next click reports a
+    // verdict about a file the user believes they have replaced.
+    clearChosen(which);
+    renderTooLarge(which, file.name, file.size);
     return;
   }
   const bytes = await file.arrayBuffer();
@@ -381,7 +417,7 @@ function run() {
         renderVerdict(message.word, message.seconds, message.peakBytes, files);
         break;
       case 'refused':
-        renderTooLarge(files.proof, chosen.proof.bytes.byteLength);
+        renderTooLarge('proof', files.proof, chosen.proof.bytes.byteLength);
         break;
       case 'exhausted':
         renderExhausted(message.needBytes, message.detail);
