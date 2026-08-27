@@ -132,6 +132,13 @@ jobs:
       # Pinned to a commit, not a tag: a tag is a moving pointer someone
       # else controls, and this workflow runs on every push.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      # Before anything is built, because it needs nothing built. The browser
+      # check below proves no request leaves the origin on the paths a reader
+      # travels; this proves the two properties that hold it up on the paths a
+      # reader does not: that the worker fetches its own module and not one a
+      # message names, and that a message it cannot read gets an error rather
+      # than a verdict.
+      - run: node tools/worker_contract.mjs
       - name: Install the pinned toolchain with the wasm32 target
         run: |
           rustup toolchain install 1.97.1 --profile minimal \

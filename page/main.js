@@ -7,8 +7,6 @@
 
 import { MAX_INPUT_BYTES, MAX_INPUT_LABEL } from './limits.js';
 
-const MODULE_URL = 'refute_wasm.wasm';
-
 /**
  * The preloaded examples.
  *
@@ -438,9 +436,10 @@ function run() {
   };
 
   // The buffers are copied rather than transferred, so that checking the same
-  // pair twice does not find them detached the second time.
+  // pair twice does not find them detached the second time. The two files and
+  // nothing else: the worker names the module it loads, so that the one request
+  // this page makes is not a field in a message.
   worker.postMessage({
-    moduleUrl: MODULE_URL,
     cnf: chosen.cnf.bytes.slice(0),
     proof: chosen.proof.bytes.slice(0),
   });

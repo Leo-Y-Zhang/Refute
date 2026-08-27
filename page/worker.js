@@ -21,8 +21,39 @@ const WORDS = {
   [UNSUPPORTED]: 'UNSUPPORTED',
 };
 
+/**
+ * The module this worker loads, named here rather than taken from the message.
+ *
+ * It used to arrive in the message beside the two files, which made the one URL
+ * this page fetches after load a thing the sender chose. Nothing but the
+ * document that constructed it can post to a dedicated worker, and that
+ * document posted a constant, so nothing was choosing anything — but "nothing
+ * leaves this origin" is the only claim the page makes, and a claim whose
+ * enforcement is the sender naming a well-behaved URL is a claim about the
+ * sender. The string is resolved against this file's own URL exactly as the one
+ * in the message was, so the request itself is unchanged.
+ */
+const MODULE_URL = 'refute_wasm.wasm';
+
 self.onmessage = async (event) => {
-  const { moduleUrl, cnf, proof } = event.data;
+  // No `event.origin` check, and not by omission. A dedicated worker has one
+  // sender, the document that constructed it, and its messages carry an empty
+  // origin: there is nothing to compare it against and no second origin that
+  // could reach this handler at all.
+  //
+  // The shape is worth checking, though, and for the reason every check in this
+  // file exists. `new Uint8Array(undefined)` is an empty array rather than an
+  // error, an empty formula and an empty proof are something the checker
+  // answers — `b02_empty_cnf` in tests/boundary.rs says NOT VERIFIED — and this
+  // file would then post that as a verdict about bytes nobody supplied.
+  const { cnf, proof } = event.data ?? {};
+  if (!(cnf instanceof ArrayBuffer) || !(proof instanceof ArrayBuffer)) {
+    self.postMessage({
+      kind: 'internal',
+      detail: 'the worker was sent something other than a formula and a proof',
+    });
+    return;
+  }
 
   let instance;
   try {
@@ -30,7 +61,7 @@ self.onmessage = async (event) => {
     // fetch where it does not. GitHub Pages serves .wasm as application/wasm;
     // a local static server may not, and a page that only worked on one of
     // them would be a page nobody could develop.
-    const response = await fetch(moduleUrl);
+    const response = await fetch(MODULE_URL);
     if (!response.ok) {
       throw new Error(`fetching the checker gave HTTP ${response.status}`);
     }
