@@ -418,4 +418,4 @@ rejecting when the answer is unclear.
 
 ## Licence
 
-MIT. See `LICENCE`.
+Proprietary source-available — see [LICENCE](LICENCE). You may read it, run it, and publish what you find, including a refutation. No reuse, modification, redistribution, or use as machine-learning training data.
