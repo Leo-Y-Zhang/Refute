@@ -310,3 +310,33 @@ fn p11_resolvent_block_hints_propagate() {
     // the coverage no real proof provides.
     assert_eq!(stats.hints_resolved, 7);
 }
+
+/// P13. Two resolvent blocks, where the first is refuted by its very first
+/// literal and pushes nothing onto the trail before `unwind(base)` runs.
+///
+/// `checker.rs:851`'s `while self.trail.len() > mark` survived the whole
+/// mutant suite as `>=`, because every fixture that unwinds a non-empty block
+/// leaves `trail.len() > base`, where `>` and `>=` agree. Here block 1's
+/// resolvent is `-1 2`: `2` is already true (from the lemma's own negated
+/// literal `-2`), so the block loop breaks on its first literal having pushed
+/// nothing, and `trail.len() == base` when `unwind(base)` runs. `>=` pops one
+/// extra entry there — the assumption that `2` is true — which block 2 needs:
+/// its hint clause `3 -2` only conflicts (both literals false) when `2` is
+/// still assigned. Losing it turns the hint into a unit propagation instead of
+/// a conflict, and the valid lemma is refused as `NoConflict`.
+#[test]
+fn p13_zero_width_block_keeps_the_earlier_assumption() {
+    let formula = "p cnf 3 5\n-1 2 0\n-1 3 0\n3 -2 0\n1 0\n-3 0\n";
+    // Lemma 6, `1 or not-2`, is RAT on pivot `1` with two candidates: clause 1
+    // (block with no hints, falsified at once) and clause 2 (block whose hint,
+    // clause 3, needs `2` still assigned true). Step 7 derives the empty
+    // clause by plain RUP, independently of the lemma.
+    let proof = "6 1 -2 0 -1 -2 3 0\n7 0 4 1 2 5 0\n";
+    let outcome = refute::check_readers(
+        Cursor::new(formula.as_bytes()),
+        Cursor::new(proof.as_bytes()),
+        &Limits::default(),
+    );
+    assert_eq!(outcome.verdict, Verdict::Verified);
+    assert_eq!(outcome.stats.resolvent_blocks, 2);
+}
