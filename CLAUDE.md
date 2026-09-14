@@ -53,7 +53,7 @@ see caveat below.
 ## Test
 
 ```
-cargo test --workspace         # 165 passed across both crates, ~8s
+cargo test --workspace         # 166 passed across both crates, ~8s
 ```
 Fastest useful subset — the security-relevant corruption-detection suite,
 one integration binary:
@@ -63,7 +63,7 @@ cargo test --workspace --test negative
 
 ## Verification gate (source of truth)
 
-The full `cargo test --workspace` run (165 tests, cheap at ~8s) is the
+The full `cargo test --workspace` run (166 tests, cheap at ~8s) is the
 practical gate. Within it, **`negative.rs` (24 corruption controls) and
 `boundary.rs` (26 edge cases) are what the README treats as the load-bearing
 half of the suite** — `positive.rs` only proves the checker accepts valid
