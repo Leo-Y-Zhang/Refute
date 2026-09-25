@@ -233,8 +233,9 @@ cargo test --workspace
 
 168 tests: 14 proofs that must verify and 24 corruption controls that must not
 on the LRAT path, 35 on the DRAT path, 26 boundary cases, 16 on what the clause
-store holds, 15 on the command line contract, 8 on the trust boundary, 19 unit
-tests inside the library, and 11 in the WebAssembly wrapper described below.
+store holds, 15 on the command line contract (one of them Linux-only, since it
+needs a file name that is not UTF-8), 8 on the trust boundary, 19 unit tests
+inside the library, and 11 in the WebAssembly wrapper described below.
 
 `--workspace` because there are two crates now, and the second one exists for a
 reason worth reading: [the playground](#the-playground).
