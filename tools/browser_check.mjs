@@ -593,6 +593,71 @@ if (loaded === null) {
 }
 
 // ---------------------------------------------------------------------------
+// A file replaced after its verdict.
+//
+// The same duty as the refusal above, for a file the page accepts. A verdict
+// on screen is read as a statement about the files in the two slots, and a
+// replacement under the same name — the usual thing after editing a proof —
+// leaves the panel naming exactly the files that are loaded. If the old
+// verdict is still there, the page is reporting a verdict about bytes the
+// module never saw.
+//
+// The replacement is 2,048 bytes against the fixture's 86, so the slot's size
+// label is what says the page has taken it.
+
+stage = 'checking what the page does with a file replaced after its verdict';
+await devtools.send('Page.navigate', { url: `${origin}/?example=tiny` });
+const settled = await until(
+  async () =>
+    (
+      await devtools.evaluate("document.getElementById('verdict').className")
+    )?.includes('done'),
+  { timeoutMs: 30000 },
+);
+if (settled === null) {
+  failures.push(
+    'the tiny example never reached a verdict, so there was nothing on ' +
+      'screen for a replaced file to clear',
+  );
+} else {
+  await devtools.evaluate(`(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File([new Uint8Array(2048).fill(0x20)], 'tiny_unsat.cnf'),
+    );
+    document.getElementById('cnf-drop').dispatchEvent(
+      new DragEvent('drop', {
+        dataTransfer: transfer,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  })()`);
+  const taken = await until(
+    async () =>
+      (
+        await devtools.evaluate("document.getElementById('cnf-chosen').innerText")
+      )?.includes('(2.0 KB)'),
+    { timeoutMs: 30000 },
+  );
+  const stale = await devtools.evaluate(
+    "document.querySelector('#verdict .word')?.innerText ?? null",
+  );
+  console.log(
+    `replaced file     panel ${stale === null ? 'cleared' : `still reads ${JSON.stringify(stale)}`}`,
+  );
+  if (taken === null) {
+    failures.push('a replacement formula dropped on the page was never taken');
+  } else if (stale !== null) {
+    failures.push(
+      `the panel still reads ${JSON.stringify(stale)} after the formula it ` +
+        'was about was replaced, so it reports a verdict about a file the ' +
+        'module never saw',
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Rollback step 3, from the protocol rather than from a screenshot.
 
 const foreign = [...new Set(requests)].filter((url) => !url.startsWith(origin));

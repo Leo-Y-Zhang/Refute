@@ -419,3 +419,8 @@ is not a verdict — too large, internal error, checker could not start, example
 not available — says what happened instead, and none of them uses a verdict
 word. A trap in the module is reported as an internal error, never as `NOT
 VERIFIED`, because a crash is not an accusation.
+
+Nor will it leave one on screen after either file is replaced. Choosing a file
+stops a check in progress and puts the panel back to *No proof checked yet*, so
+a verdict is only ever shown beside the bytes it is about — a replacement under
+the same name included, which is the usual thing after editing a proof.
