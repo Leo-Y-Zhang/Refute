@@ -391,18 +391,34 @@ await devtools.send('Page.enable');
 //
 // `flatten: true` makes worker events arrive on this same socket with a
 // sessionId, so one listener sees all of them.
+//
+// `waitForDebuggerOnStart: true`, and that is the second half of the same
+// lesson. Without it a worker runs from the moment it attaches, and its
+// `fetch` races the `Network.enable` sent to its session: measured over six
+// runs, between none and four of the six module fetches the check causes were
+// recorded, and one run failed outright on "no request for refute_wasm.wasm".
+// A request made before the watch is on is exactly the request a privacy check
+// exists to see. So every attached target is held until Network and Runtime
+// are enabled on it, and only then let go.
 await devtools.send('Target.setAutoAttach', {
   autoAttach: true,
-  waitForDebuggerOnStart: false,
+  waitForDebuggerOnStart: true,
   flatten: true,
 });
 const attachedSessions = new Set();
+let workersStarted = 0;
 devtools.on((message) => {
   if (message.method === 'Target.attachedToTarget') {
-    const { sessionId } = message.params;
-    attachedSessions.add(`${message.params.targetInfo.type} ${message.params.targetInfo.url}`);
-    void devtools.send('Network.enable', {}, sessionId);
-    void devtools.send('Runtime.enable', {}, sessionId);
+    const { sessionId, targetInfo } = message.params;
+    attachedSessions.add(`${targetInfo.type} ${targetInfo.url}`);
+    if (targetInfo.type === 'worker') {
+      workersStarted += 1;
+    }
+    void (async () => {
+      await devtools.send('Network.enable', {}, sessionId);
+      await devtools.send('Runtime.enable', {}, sessionId);
+      await devtools.send('Runtime.runIfWaitingForDebugger', {}, sessionId);
+    })();
   }
 });
 
@@ -583,15 +599,30 @@ const foreign = [...new Set(requests)].filter((url) => !url.startsWith(origin));
 console.log('');
 console.log(`workers seen    ${attachedSessions.size ? [...attachedSessions].join(', ') : 'none'}`);
 console.log(`requests        ${requests.length}, ${new Set(requests).size} distinct`);
+const moduleFetches = requests.filter((url) =>
+  url.endsWith('refute_wasm.wasm'),
+).length;
+console.log(`module fetches  ${moduleFetches}, from ${workersStarted} workers started`);
 
 // If the module itself never appears, this check is not watching the worker,
 // and a clean report would mean nothing. It is the one request that must be
 // there.
-if (!requests.some((url) => url.endsWith('refute_wasm.wasm'))) {
+if (moduleFetches === 0) {
   failures.push(
     'no request for refute_wasm.wasm was recorded, so the worker was not ' +
       'being watched. A privacy claim checked only where nothing happens is ' +
       'not a checked privacy claim.',
+  );
+} else if (moduleFetches < workersStarted) {
+  // And once per worker, not once per run. Every worker the page starts
+  // fetches the module before it does anything else, so a worker whose fetch
+  // is missing is a worker whose first requests went unwatched — which is
+  // what `waitForDebuggerOnStart` above is there to prevent, and this is what
+  // says so if it ever stops preventing it.
+  failures.push(
+    `${workersStarted} workers started but only ${moduleFetches} fetches of ` +
+      'refute_wasm.wasm were recorded, so some worker ran before it was ' +
+      'being watched.',
   );
 }
 for (const url of [...new Set(requests)].sort()) {
