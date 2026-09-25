@@ -377,6 +377,15 @@ async function takeFile(which, file) {
 }
 
 function wireInput(which, input) {
+  // Emptied as the chooser opens, so that choosing the same path again is a
+  // change. A file input fires `change` only when its selection differs, and
+  // an edited proof chosen again under its own path is the same selection: the
+  // page never heard of it, kept the bytes it had, and went on showing their
+  // verdict beside a file the user had just replaced. A click is what opens
+  // the chooser, from the mouse, the keyboard or the label alike.
+  input.addEventListener('click', () => {
+    input.value = '';
+  });
   input.addEventListener('change', () => {
     const file = input.files?.[0];
     if (file !== undefined) {

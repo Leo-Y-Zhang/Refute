@@ -42,7 +42,7 @@ import { fileURLToPath } from 'node:url';
 chdir(resolvePath(dirname(fileURLToPath(import.meta.url)), '..'));
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -697,6 +697,131 @@ if (settled === null) {
         'module never saw',
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// The same path, chosen again through the file input.
+//
+// The drop above hands the page a new `File` every time. The input does not:
+// it fires `change` only when its selection differs, and an edited proof chosen
+// again from its own path is the same selection. The page never heard of the
+// edit, kept the bytes it had, and went on showing their verdict. Driven
+// through the chooser itself, intercepted, because the input is the path a
+// keyboard user has and the drop zone is only an addition to it.
+//
+// The file is 1,024 bytes the first time and 3,072 the second, so the slot's
+// size label is again what says the page has taken it.
+
+stage = 'checking what the page does with the same path chosen twice';
+let chooserOpened = null;
+devtools.on((message) => {
+  if (message.method === 'Page.fileChooserOpened') {
+    chooserOpened?.(message.params.backendNodeId ?? null);
+  }
+});
+
+/** Opens the proof input's chooser the way a click does, and answers it. */
+async function chooseProof(path) {
+  const opened = new Promise((resolve) => {
+    chooserOpened = resolve;
+  });
+  // A chooser opens only on user activation, which `userGesture` supplies.
+  await devtools.send('Runtime.evaluate', {
+    expression: "document.getElementById('proof-input').click()",
+    userGesture: true,
+  });
+  const backendNodeId = await Promise.race([
+    opened,
+    sleep(10000).then(() => null),
+  ]);
+  chooserOpened = null;
+  if (backendNodeId === null) {
+    return false;
+  }
+  await devtools.send('DOM.setFileInputFiles', {
+    files: [path],
+    backendNodeId,
+  });
+  return true;
+}
+
+/** Whether the proof slot's label comes to show this size. */
+const proofSlotShows = async (size) =>
+  (await until(
+    async () =>
+      (
+        await devtools.evaluate(
+          "document.getElementById('proof-chosen').innerText",
+        )
+      )?.includes(`(${size})`),
+    { timeoutMs: 10000 },
+  )) !== null;
+
+const chooserDir = mkdtempSync(join(tmpdir(), 'refute-chooser-'));
+const edited = join(chooserDir, 'edited.lrat');
+try {
+  await devtools.send('Page.setInterceptFileChooserDialog', { enabled: true });
+  await devtools.send('Page.navigate', { url: `${origin}/?example=tiny` });
+  const before = await until(
+    async () =>
+      (
+        await devtools.evaluate("document.getElementById('verdict').className")
+      )?.includes('done'),
+    { timeoutMs: 30000 },
+  );
+  writeFileSync(edited, ' '.repeat(1024));
+  if (before === null) {
+    failures.push(
+      'the tiny example never reached a verdict, so there was nothing ' +
+        'loaded for a proof chosen through the file input to replace',
+    );
+  } else if (
+    !(await chooseProof(edited)) ||
+    !(await proofSlotShows('1.0 KB'))
+  ) {
+    failures.push(
+      'a proof chosen through the file input was never taken, so there was ' +
+        'nothing to choose again',
+    );
+  } else {
+    // A verdict about those bytes on screen, as a reader would have one.
+    await devtools.evaluate("document.getElementById('run').click()");
+    const checked = await until(
+      async () =>
+        (
+          await devtools.evaluate(
+            "document.getElementById('verdict').className",
+          )
+        )?.includes('done'),
+      { timeoutMs: 30000 },
+    );
+    writeFileSync(edited, ' '.repeat(3072));
+    const again =
+      (await chooseProof(edited)) && (await proofSlotShows('3.0 KB'));
+    const stale = await devtools.evaluate(
+      "document.querySelector('#verdict .word')?.innerText ?? null",
+    );
+    console.log(
+      `same path again   ${again ? 'taken' : 'ignored'}, panel ` +
+        `${stale === null ? 'cleared' : `still reads ${JSON.stringify(stale)}`}`,
+    );
+    if (checked === null) {
+      failures.push('the proof chosen through the file input never reached a verdict');
+    } else if (!again) {
+      failures.push(
+        'an edited proof chosen again from the same path was never taken, so ' +
+          'the page kept the old bytes and went on showing their verdict',
+      );
+    } else if (stale !== null) {
+      failures.push(
+        `the panel still reads ${JSON.stringify(stale)} after the proof it ` +
+          'was about was chosen again with new contents',
+      );
+    }
+  }
+} finally {
+  await devtools.send('Page.setInterceptFileChooserDialog', { enabled: false });
+  rmSync(chooserDir, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------
