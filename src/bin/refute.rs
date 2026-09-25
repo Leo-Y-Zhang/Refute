@@ -4,6 +4,8 @@
 //! progress bar in a pipe is noise. Output is plain ASCII with no colour, so a
 //! verdict survives `refute a.cnf b.lrat > log.txt`.
 
+use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -59,8 +61,39 @@ fn kb(bytes: usize) -> String {
     }
 }
 
+/// Bytes from the command line or the operating system, on their way to a
+/// terminal: every byte outside printable ASCII written as `\xNN`.
+///
+/// The rule the library applies to every token it quotes out of a file, and
+/// for the same reason. A path is chosen by whoever named the file, which in a
+/// script that runs this over a directory someone else fills is not the person
+/// reading the output, and `ESC [` in a name that fails to open would otherwise
+/// reach the terminal and repaint the lines around it. Byte for byte rather
+/// than through `Path::display`, which would turn a byte that is not UTF-8
+/// into a character the name never held, and would print that character
+/// rather than ASCII.
+fn escaped(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        match byte {
+            0x20..=0x7e => out.push(char::from(byte)),
+            // Writing to a `String` cannot fail.
+            other => {
+                let _ = write!(out, "\\x{other:02x}");
+            }
+        }
+    }
+    out
+}
+
 fn run() -> u8 {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `args_os`, not `args`. A path is whatever bytes the operating system
+    // allows, and `std::env::args` panics on one that is not valid Unicode:
+    // a readable formula named in Latin-1 ended in exit 101, which is not a
+    // code the contract has, with nothing checked. Flags are ASCII, so they
+    // are matched through `to_str`; everything else stays an `OsStr` until it
+    // is opened.
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     // Help and version are answered only when they are the whole command line.
     // Honouring them from anywhere in argv means `refute a.cnf a.lrat --help`
@@ -68,12 +101,12 @@ fn run() -> u8 {
     // exit code is the verdict: one stray argument in a CI script would read
     // as a pass for a proof that was never opened.
     if let [only] = args.as_slice() {
-        match only.as_str() {
-            "--help" | "-h" => {
+        match only.to_str() {
+            Some("--help" | "-h") => {
                 println!("{USAGE}");
                 return EXIT_VERIFIED;
             }
-            "--version" | "-V" => {
+            Some("--version" | "-V") => {
                 println!("refute {}", env!("CARGO_PKG_VERSION"));
                 return EXIT_VERIFIED;
             }
@@ -81,7 +114,7 @@ fn run() -> u8 {
         }
     }
 
-    let mut positional: Vec<&str> = Vec::new();
+    let mut positional: Vec<&OsStr> = Vec::new();
     let mut stats = false;
     let mut flags_ended = false;
     let mut forced: Option<Format> = None;
@@ -91,36 +124,39 @@ fn run() -> u8 {
             positional.push(arg);
             continue;
         }
-        match arg.as_str() {
+        match arg.to_str() {
             // Everything after `--` is a path, so a file really called
             // `--help` can still be checked.
-            "--" => flags_ended = true,
-            "--stats" => stats = true,
+            Some("--") => flags_ended = true,
+            Some("--stats") => stats = true,
             // Skip detection entirely. A file that then fails to parse is a
             // rejection and not a usage error: the user made a claim about the
             // file and the file contradicted it, which is a verdict.
-            "--drat" => forced = Some(Format::Drat),
-            "--lrat" => forced = Some(Format::Lrat),
-            "--help" | "-h" | "--version" | "-V" => {
+            Some("--drat") => forced = Some(Format::Drat),
+            Some("--lrat") => forced = Some(Format::Lrat),
+            Some("--help" | "-h" | "--version" | "-V") => {
                 eprintln!("{USAGE}");
                 return EXIT_USAGE;
             }
             // A bad value is a usage error and not a verdict, because nothing
             // about the proof was in question. Same treatment as a missing
             // path: exit 3, so a typo cannot read as a pass.
-            other if other.starts_with(DEAD_ARENA_FLAG) => {
+            Some(other) if other.starts_with(DEAD_ARENA_FLAG) => {
                 match other
                     .get(DEAD_ARENA_FLAG.len()..)
                     .and_then(|value| value.parse::<usize>().ok())
                 {
                     Some(lits) => dead_arena_lits = Some(lits),
                     None => {
-                        eprintln!("refute: '{other}' needs a non-negative number");
+                        eprintln!(
+                            "refute: '{}' needs a non-negative number",
+                            escaped(other.as_bytes())
+                        );
                         return EXIT_USAGE;
                     }
                 }
             }
-            other => positional.push(other),
+            _ => positional.push(arg),
         }
     }
 
@@ -130,7 +166,7 @@ fn run() -> u8 {
     // exactly three positional arguments and the first is `check`. A file
     // genuinely called `check` is still reachable, as `refute -- check b.drat`
     // or by any path with a separator in it.
-    let paths: &[&str] = match positional.as_slice() {
+    let paths: &[&OsStr] = match positional.as_slice() {
         [verb, rest @ ..] if *verb == "check" && rest.len() == 2 && !flags_ended => rest,
         other => other,
     };
@@ -145,14 +181,22 @@ fn run() -> u8 {
     let formula_file = match File::open(formula_path) {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("refute: cannot open '{}': {err}", formula_path.display());
+            eprintln!(
+                "refute: cannot open '{}': {}",
+                escaped(formula_path.as_os_str().as_encoded_bytes()),
+                escaped(err.to_string().as_bytes())
+            );
             return EXIT_USAGE;
         }
     };
     let proof_file = match File::open(proof_path) {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("refute: cannot open '{}': {err}", proof_path.display());
+            eprintln!(
+                "refute: cannot open '{}': {}",
+                escaped(proof_path.as_os_str().as_encoded_bytes()),
+                escaped(err.to_string().as_bytes())
+            );
             return EXIT_USAGE;
         }
     };
