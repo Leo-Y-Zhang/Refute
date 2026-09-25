@@ -268,6 +268,27 @@ if (server !== null) {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
   });
+
+  // The same server `tools/serve_page.mjs --lan` puts on a network, so it is
+  // asked one thing a browser never sends: a path whose escape does not
+  // decode. That used to throw inside the request handler and end the
+  // process, which here is this check and there is the server.
+  stage = 'asking the static server for a path that does not decode';
+  const status = (path) =>
+    fetch(`${origin}${path}`)
+      .then(async (response) => {
+        await response.arrayBuffer();
+        return response.status;
+      })
+      .catch(() => null);
+  const malformed = await status('/%E0%A4%A');
+  const afterwards = await status('/');
+  if (malformed !== 404 || afterwards !== 200) {
+    failures.push(
+      `the static server answered a malformed path with ${malformed} and ` +
+        `the page after it with ${afterwards}, where 404 and 200 were wanted`,
+    );
+  }
 }
 
 const browser = spawn(

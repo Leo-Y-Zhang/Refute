@@ -40,7 +40,17 @@ const TYPES = {
 
 /** The file a request path names, or null if it names nothing we serve. */
 export function resolvePath(urlPath, root) {
-  const clean = normalize(decodeURIComponent(urlPath)).replace(/\\/g, '/');
+  // `decodeURIComponent` throws on a malformed escape such as `/%E0%A4%A`, and
+  // a throw inside the request handler is an uncaught exception that ends the
+  // process: one request, from anyone who can reach the port, and with `--lan`
+  // that is the whole network. A path that does not decode names nothing.
+  let decoded;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return null;
+  }
+  const clean = normalize(decoded).replace(/\\/g, '/');
   // A path that climbs out of the tree is not a path we serve. This process can
   // read the whole disk; the page is allowed three directories of it.
   if (clean.includes('..')) {
