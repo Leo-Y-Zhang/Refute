@@ -43,6 +43,7 @@ chdir(resolvePath(dirname(fileURLToPath(import.meta.url)), '..'));
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -281,12 +282,32 @@ if (server !== null) {
         return response.status;
       })
       .catch(() => null);
+  // And a request target that is not a URL at all, which `fetch` cannot send,
+  // so it goes over a bare socket. `new URL` threw on it one step before the
+  // decode did, with the same result.
+  const rawStatus = (target) =>
+    new Promise((resolve) => {
+      let reply = '';
+      const socket = connect(port, '127.0.0.1', () =>
+        socket.write(
+          `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
+        ),
+      );
+      socket.setTimeout(10000, () => socket.destroy());
+      socket.on('data', (chunk) => {
+        reply += chunk;
+      });
+      socket.on('close', () => resolve(Number(reply.split(' ')[1]) || null));
+      socket.on('error', () => resolve(null));
+    });
   const malformed = await status('/%E0%A4%A');
+  const unparsable = await rawStatus('http://[/');
   const afterwards = await status('/');
-  if (malformed !== 404 || afterwards !== 200) {
+  if (malformed !== 404 || unparsable !== 404 || afterwards !== 200) {
     failures.push(
-      `the static server answered a malformed path with ${malformed} and ` +
-        `the page after it with ${afterwards}, where 404 and 200 were wanted`,
+      `the static server answered a malformed path with ${malformed}, a ` +
+        `target that is not a URL with ${unparsable} and the page after ` +
+        `them with ${afterwards}, where 404, 404 and 200 were wanted`,
     );
   }
 }

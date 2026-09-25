@@ -82,10 +82,17 @@ export function resolvePath(urlPath, root) {
  */
 export function createPageServer({ root = null } = {}) {
   return createServer((request, response) => {
-    const path = resolvePath(
-      new URL(request.url, 'http://localhost').pathname,
-      root,
-    );
+    // The same rule one step earlier. A request target in absolute form, such
+    // as `GET http://[/ HTTP/1.1`, is not a URL at all, `new URL` throws on
+    // it, and that throw ended the process exactly as the malformed escape in
+    // `resolvePath` did. A target that does not parse names nothing.
+    let pathname = null;
+    try {
+      pathname = new URL(request.url, 'http://localhost').pathname;
+    } catch {
+      // Left null, which is the 404 below.
+    }
+    const path = pathname === null ? null : resolvePath(pathname, root);
     if (path === null || !existsSync(path) || !statSync(path).isFile()) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       response.end(`not served: ${request.url}\n`);
