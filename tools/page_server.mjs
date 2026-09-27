@@ -40,7 +40,17 @@ const TYPES = {
 
 /** The file a request path names, or null if it names nothing we serve. */
 export function resolvePath(urlPath, root) {
-  const clean = normalize(decodeURIComponent(urlPath)).replace(/\\/g, '/');
+  // `decodeURIComponent` throws on a malformed escape such as `/%E0%A4%A`, and
+  // a throw inside the request handler is an uncaught exception that ends the
+  // process: one request, from anyone who can reach the port, and with `--lan`
+  // that is the whole network. A path that does not decode names nothing.
+  let decoded;
+  try {
+    decoded = decodeURIComponent(urlPath);
+  } catch {
+    return null;
+  }
+  const clean = normalize(decoded).replace(/\\/g, '/');
   // A path that climbs out of the tree is not a path we serve. This process can
   // read the whole disk; the page is allowed three directories of it.
   if (clean.includes('..')) {
@@ -72,10 +82,17 @@ export function resolvePath(urlPath, root) {
  */
 export function createPageServer({ root = null } = {}) {
   return createServer((request, response) => {
-    const path = resolvePath(
-      new URL(request.url, 'http://localhost').pathname,
-      root,
-    );
+    // The same rule one step earlier. A request target in absolute form, such
+    // as `GET http://[/ HTTP/1.1`, is not a URL at all, `new URL` throws on
+    // it, and that throw ended the process exactly as the malformed escape in
+    // `resolvePath` did. A target that does not parse names nothing.
+    let pathname = null;
+    try {
+      pathname = new URL(request.url, 'http://localhost').pathname;
+    } catch {
+      // Left null, which is the 404 below.
+    }
+    const path = pathname === null ? null : resolvePath(pathname, root);
     if (path === null || !existsSync(path) || !statSync(path).isFile()) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       response.end(`not served: ${request.url}\n`);

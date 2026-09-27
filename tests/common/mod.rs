@@ -19,6 +19,7 @@
 // Each test crate uses a different part of this module.
 #![allow(dead_code)]
 
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -84,6 +85,13 @@ pub fn cli(cnf: &str, proof: &str) -> Run {
 
 /// Runs the built binary with arbitrary arguments.
 pub fn cli_args(args: &[String]) -> Run {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    cli_os_args(&args)
+}
+
+/// The same, with arguments that need not be valid Unicode, because a path
+/// is whatever bytes the operating system allows and not text.
+pub fn cli_os_args(args: &[OsString]) -> Run {
     let output = Command::new(env!("CARGO_BIN_EXE_refute"))
         .args(args)
         .output()

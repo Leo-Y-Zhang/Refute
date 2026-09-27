@@ -93,6 +93,15 @@ const EMPTY_LABEL = {
   proof: dom.proofChosen.textContent,
 };
 
+/**
+ * What the verdict panel says before anything has been checked, read out of
+ * the markup for the same reason, and put back whenever the files it could be
+ * describing change.
+ */
+const IDLE_PANEL = Array.from(dom.verdict.childNodes, (node) =>
+  node.cloneNode(true),
+);
+
 let worker = null;
 let ticker = null;
 
@@ -317,11 +326,31 @@ function renderUnavailable(detail) {
 // ---------------------------------------------------------------------------
 // Choosing files
 
+/**
+ * Takes down whatever the panel says about the files that were loaded.
+ *
+ * A verdict on screen is read as a statement about the files in the two
+ * slots. Replacing one — under the same name, which is the usual thing after
+ * editing a proof — used to leave the old verdict there beside the new file,
+ * and a check still running on the old bytes would post its verdict over
+ * whatever came next. Either way the page reported a verdict about a file the
+ * module never saw. So a changed slot stops the check and restores the panel
+ * index.html starts with; Check is one click away. `stopWorker` also settles
+ * the Check button from what the two slots now hold.
+ */
+function forgetVerdict() {
+  stopWorker();
+  panel(
+    IDLE_PANEL.map((node) => node.cloneNode(true)),
+    'idle',
+  );
+}
+
 function setChosen(which, name, bytes) {
   chosen[which] = { name, bytes };
   const label = which === 'cnf' ? dom.cnfChosen : dom.proofChosen;
   label.textContent = `${name} (${(bytes.byteLength / 1024).toFixed(1)} KB)`;
-  dom.run.disabled = chosen.cnf === null || chosen.proof === null;
+  forgetVerdict();
 }
 
 /** Empties one slot, so that nothing stale can be checked out of it. */
@@ -329,7 +358,7 @@ function clearChosen(which) {
   chosen[which] = null;
   const label = which === 'cnf' ? dom.cnfChosen : dom.proofChosen;
   label.textContent = EMPTY_LABEL[which];
-  dom.run.disabled = true;
+  forgetVerdict();
 }
 
 async function takeFile(which, file) {
@@ -348,6 +377,15 @@ async function takeFile(which, file) {
 }
 
 function wireInput(which, input) {
+  // Emptied as the chooser opens, so that choosing the same path again is a
+  // change. A file input fires `change` only when its selection differs, and
+  // an edited proof chosen again under its own path is the same selection: the
+  // page never heard of it, kept the bytes it had, and went on showing their
+  // verdict beside a file the user had just replaced. A click is what opens
+  // the chooser, from the mouse, the keyboard or the label alike.
+  input.addEventListener('click', () => {
+    input.value = '';
+  });
   input.addEventListener('change', () => {
     const file = input.files?.[0];
     if (file !== undefined) {

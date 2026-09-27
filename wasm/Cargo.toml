@@ -15,7 +15,7 @@ publish = false
 crate-type = ["cdylib"]
 
 # One dependency, by path, and it is the checker itself. The no-dependency rule
-# in docs/PRD.md is what makes the module 73,699 bytes and makes its audit
+# in docs/PRD.md is what makes the module 73,165 bytes and makes its audit
 # surface the same source a reader can already read.
 [dependencies]
 refute = { path = ".." }

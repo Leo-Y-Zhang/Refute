@@ -231,10 +231,11 @@ cargo build --release
 cargo test --workspace
 ```
 
-165 tests: 13 proofs that must verify and 24 corruption controls that must not
+168 tests: 14 proofs that must verify and 24 corruption controls that must not
 on the LRAT path, 35 on the DRAT path, 26 boundary cases, 16 on what the clause
-store holds, 13 on the command line contract, 8 on the trust boundary, 19 unit
-tests inside the library, and 11 in the WebAssembly wrapper described below.
+store holds, 15 on the command line contract (one of them Linux-only, since it
+needs a file name that is not UTF-8), 8 on the trust boundary, 19 unit tests
+inside the library, and 11 in the WebAssembly wrapper described below.
 
 `--workspace` because there are two crates now, and the second one exists for a
 reason worth reading: [the playground](#the-playground).
@@ -247,7 +248,7 @@ rejection was required. The failing output is in the commit that introduced
 them.
 
 **The tests added after that point cannot claim it, and do not.** R9–R11, P12,
-B22, the binary-proof mapping guard, the assertion that a pure-RUP proof never
+P13, B22, the binary-proof mapping guard, the assertion that a pure-RUP proof never
 scans for candidates, and the strengthened counter assertions were all written
 against code that already worked. Each is justified by a weaker piece of
 evidence instead, and by a specific one: the line of the rule it covers was

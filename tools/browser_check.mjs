@@ -42,7 +42,8 @@ import { fileURLToPath } from 'node:url';
 chdir(resolvePath(dirname(fileURLToPath(import.meta.url)), '..'));
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -268,6 +269,47 @@ if (server !== null) {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
   });
+
+  // The same server `tools/serve_page.mjs --lan` puts on a network, so it is
+  // asked one thing a browser never sends: a path whose escape does not
+  // decode. That used to throw inside the request handler and end the
+  // process, which here is this check and there is the server.
+  stage = 'asking the static server for a path that does not decode';
+  const status = (path) =>
+    fetch(`${origin}${path}`)
+      .then(async (response) => {
+        await response.arrayBuffer();
+        return response.status;
+      })
+      .catch(() => null);
+  // And a request target that is not a URL at all, which `fetch` cannot send,
+  // so it goes over a bare socket. `new URL` threw on it one step before the
+  // decode did, with the same result.
+  const rawStatus = (target) =>
+    new Promise((resolve) => {
+      let reply = '';
+      const socket = connect(port, '127.0.0.1', () =>
+        socket.write(
+          `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
+        ),
+      );
+      socket.setTimeout(10000, () => socket.destroy());
+      socket.on('data', (chunk) => {
+        reply += chunk;
+      });
+      socket.on('close', () => resolve(Number(reply.split(' ')[1]) || null));
+      socket.on('error', () => resolve(null));
+    });
+  const malformed = await status('/%E0%A4%A');
+  const unparsable = await rawStatus('http://[/');
+  const afterwards = await status('/');
+  if (malformed !== 404 || unparsable !== 404 || afterwards !== 200) {
+    failures.push(
+      `the static server answered a malformed path with ${malformed}, a ` +
+        `target that is not a URL with ${unparsable} and the page after ` +
+        `them with ${afterwards}, where 404, 404 and 200 were wanted`,
+    );
+  }
 }
 
 const browser = spawn(
@@ -391,18 +433,34 @@ await devtools.send('Page.enable');
 //
 // `flatten: true` makes worker events arrive on this same socket with a
 // sessionId, so one listener sees all of them.
+//
+// `waitForDebuggerOnStart: true`, and that is the second half of the same
+// lesson. Without it a worker runs from the moment it attaches, and its
+// `fetch` races the `Network.enable` sent to its session: measured over six
+// runs, between none and four of the six module fetches the check causes were
+// recorded, and one run failed outright on "no request for refute_wasm.wasm".
+// A request made before the watch is on is exactly the request a privacy check
+// exists to see. So every attached target is held until Network and Runtime
+// are enabled on it, and only then let go.
 await devtools.send('Target.setAutoAttach', {
   autoAttach: true,
-  waitForDebuggerOnStart: false,
+  waitForDebuggerOnStart: true,
   flatten: true,
 });
 const attachedSessions = new Set();
+let workersStarted = 0;
 devtools.on((message) => {
   if (message.method === 'Target.attachedToTarget') {
-    const { sessionId } = message.params;
-    attachedSessions.add(`${message.params.targetInfo.type} ${message.params.targetInfo.url}`);
-    void devtools.send('Network.enable', {}, sessionId);
-    void devtools.send('Runtime.enable', {}, sessionId);
+    const { sessionId, targetInfo } = message.params;
+    attachedSessions.add(`${targetInfo.type} ${targetInfo.url}`);
+    if (targetInfo.type === 'worker') {
+      workersStarted += 1;
+    }
+    void (async () => {
+      await devtools.send('Network.enable', {}, sessionId);
+      await devtools.send('Runtime.enable', {}, sessionId);
+      await devtools.send('Runtime.runIfWaitingForDebugger', {}, sessionId);
+    })();
   }
 });
 
@@ -577,21 +635,226 @@ if (loaded === null) {
 }
 
 // ---------------------------------------------------------------------------
+// A file replaced after its verdict.
+//
+// The same duty as the refusal above, for a file the page accepts. A verdict
+// on screen is read as a statement about the files in the two slots, and a
+// replacement under the same name — the usual thing after editing a proof —
+// leaves the panel naming exactly the files that are loaded. If the old
+// verdict is still there, the page is reporting a verdict about bytes the
+// module never saw.
+//
+// The replacement is 2,048 bytes against the fixture's 86, so the slot's size
+// label is what says the page has taken it.
+
+stage = 'checking what the page does with a file replaced after its verdict';
+await devtools.send('Page.navigate', { url: `${origin}/?example=tiny` });
+const settled = await until(
+  async () =>
+    (
+      await devtools.evaluate("document.getElementById('verdict').className")
+    )?.includes('done'),
+  { timeoutMs: 30000 },
+);
+if (settled === null) {
+  failures.push(
+    'the tiny example never reached a verdict, so there was nothing on ' +
+      'screen for a replaced file to clear',
+  );
+} else {
+  await devtools.evaluate(`(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File([new Uint8Array(2048).fill(0x20)], 'tiny_unsat.cnf'),
+    );
+    document.getElementById('cnf-drop').dispatchEvent(
+      new DragEvent('drop', {
+        dataTransfer: transfer,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  })()`);
+  const taken = await until(
+    async () =>
+      (
+        await devtools.evaluate("document.getElementById('cnf-chosen').innerText")
+      )?.includes('(2.0 KB)'),
+    { timeoutMs: 30000 },
+  );
+  const stale = await devtools.evaluate(
+    "document.querySelector('#verdict .word')?.innerText ?? null",
+  );
+  console.log(
+    `replaced file     panel ${stale === null ? 'cleared' : `still reads ${JSON.stringify(stale)}`}`,
+  );
+  if (taken === null) {
+    failures.push('a replacement formula dropped on the page was never taken');
+  } else if (stale !== null) {
+    failures.push(
+      `the panel still reads ${JSON.stringify(stale)} after the formula it ` +
+        'was about was replaced, so it reports a verdict about a file the ' +
+        'module never saw',
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The same path, chosen again through the file input.
+//
+// The drop above hands the page a new `File` every time. The input does not:
+// it fires `change` only when its selection differs, and an edited proof chosen
+// again from its own path is the same selection. The page never heard of the
+// edit, kept the bytes it had, and went on showing their verdict. Driven
+// through the chooser itself, intercepted, because the input is the path a
+// keyboard user has and the drop zone is only an addition to it.
+//
+// The file is 1,024 bytes the first time and 3,072 the second, so the slot's
+// size label is again what says the page has taken it.
+
+stage = 'checking what the page does with the same path chosen twice';
+let chooserOpened = null;
+devtools.on((message) => {
+  if (message.method === 'Page.fileChooserOpened') {
+    chooserOpened?.(message.params.backendNodeId ?? null);
+  }
+});
+
+/** Opens the proof input's chooser the way a click does, and answers it. */
+async function chooseProof(path) {
+  const opened = new Promise((resolve) => {
+    chooserOpened = resolve;
+  });
+  // A chooser opens only on user activation, which `userGesture` supplies.
+  await devtools.send('Runtime.evaluate', {
+    expression: "document.getElementById('proof-input').click()",
+    userGesture: true,
+  });
+  const backendNodeId = await Promise.race([
+    opened,
+    sleep(10000).then(() => null),
+  ]);
+  chooserOpened = null;
+  if (backendNodeId === null) {
+    return false;
+  }
+  await devtools.send('DOM.setFileInputFiles', {
+    files: [path],
+    backendNodeId,
+  });
+  return true;
+}
+
+/** Whether the proof slot's label comes to show this size. */
+const proofSlotShows = async (size) =>
+  (await until(
+    async () =>
+      (
+        await devtools.evaluate(
+          "document.getElementById('proof-chosen').innerText",
+        )
+      )?.includes(`(${size})`),
+    { timeoutMs: 10000 },
+  )) !== null;
+
+const chooserDir = mkdtempSync(join(tmpdir(), 'refute-chooser-'));
+const edited = join(chooserDir, 'edited.lrat');
+try {
+  await devtools.send('Page.setInterceptFileChooserDialog', { enabled: true });
+  await devtools.send('Page.navigate', { url: `${origin}/?example=tiny` });
+  const before = await until(
+    async () =>
+      (
+        await devtools.evaluate("document.getElementById('verdict').className")
+      )?.includes('done'),
+    { timeoutMs: 30000 },
+  );
+  writeFileSync(edited, ' '.repeat(1024));
+  if (before === null) {
+    failures.push(
+      'the tiny example never reached a verdict, so there was nothing ' +
+        'loaded for a proof chosen through the file input to replace',
+    );
+  } else if (
+    !(await chooseProof(edited)) ||
+    !(await proofSlotShows('1.0 KB'))
+  ) {
+    failures.push(
+      'a proof chosen through the file input was never taken, so there was ' +
+        'nothing to choose again',
+    );
+  } else {
+    // A verdict about those bytes on screen, as a reader would have one.
+    await devtools.evaluate("document.getElementById('run').click()");
+    const checked = await until(
+      async () =>
+        (
+          await devtools.evaluate(
+            "document.getElementById('verdict').className",
+          )
+        )?.includes('done'),
+      { timeoutMs: 30000 },
+    );
+    writeFileSync(edited, ' '.repeat(3072));
+    const again =
+      (await chooseProof(edited)) && (await proofSlotShows('3.0 KB'));
+    const stale = await devtools.evaluate(
+      "document.querySelector('#verdict .word')?.innerText ?? null",
+    );
+    console.log(
+      `same path again   ${again ? 'taken' : 'ignored'}, panel ` +
+        `${stale === null ? 'cleared' : `still reads ${JSON.stringify(stale)}`}`,
+    );
+    if (checked === null) {
+      failures.push('the proof chosen through the file input never reached a verdict');
+    } else if (!again) {
+      failures.push(
+        'an edited proof chosen again from the same path was never taken, so ' +
+          'the page kept the old bytes and went on showing their verdict',
+      );
+    } else if (stale !== null) {
+      failures.push(
+        `the panel still reads ${JSON.stringify(stale)} after the proof it ` +
+          'was about was chosen again with new contents',
+      );
+    }
+  }
+} finally {
+  await devtools.send('Page.setInterceptFileChooserDialog', { enabled: false });
+  rmSync(chooserDir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
 // Rollback step 3, from the protocol rather than from a screenshot.
 
 const foreign = [...new Set(requests)].filter((url) => !url.startsWith(origin));
 console.log('');
 console.log(`workers seen    ${attachedSessions.size ? [...attachedSessions].join(', ') : 'none'}`);
 console.log(`requests        ${requests.length}, ${new Set(requests).size} distinct`);
+const moduleFetches = requests.filter((url) =>
+  url.endsWith('refute_wasm.wasm'),
+).length;
+console.log(`module fetches  ${moduleFetches}, from ${workersStarted} workers started`);
 
 // If the module itself never appears, this check is not watching the worker,
 // and a clean report would mean nothing. It is the one request that must be
 // there.
-if (!requests.some((url) => url.endsWith('refute_wasm.wasm'))) {
+if (moduleFetches === 0) {
   failures.push(
     'no request for refute_wasm.wasm was recorded, so the worker was not ' +
       'being watched. A privacy claim checked only where nothing happens is ' +
       'not a checked privacy claim.',
+  );
+} else if (moduleFetches < workersStarted) {
+  // And once per worker, not once per run. Every worker the page starts
+  // fetches the module before it does anything else, so a worker whose fetch
+  // is missing is a worker whose first requests went unwatched — which is
+  // what `waitForDebuggerOnStart` above is there to prevent, and this is what
+  // says so if it ever stops preventing it.
+  failures.push(
+    `${workersStarted} workers started but only ${moduleFetches} fetches of ` +
+      'refute_wasm.wasm were recorded, so some worker ran before it was ' +
+      'being watched.',
   );
 }
 for (const url of [...new Set(requests)].sort()) {

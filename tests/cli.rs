@@ -176,6 +176,74 @@ fn an_unreadable_token_is_quoted_with_its_bytes_escaped() {
     );
 }
 
+/// A path the CLI cannot open is quoted back under the same rule as a token
+/// it cannot read, because it is attacker-chosen in the same way: a script
+/// that runs `refute` over every file in a directory someone else fills hands
+/// it names it did not write. Before this test the name went to the terminal
+/// raw, so a missing file called `ESC [ 1 A ESC [ 2 K s VERIFIED` wrote the
+/// verdict line it named.
+#[test]
+fn a_path_that_will_not_open_is_quoted_with_its_bytes_escaped() {
+    let run = common::cli_args(&[
+        "\u{1b}[1A\u{1b}[2Ks VERIFIED.cnf".to_owned(),
+        common::fixture("tiny_unsat.lrat")
+            .to_string_lossy()
+            .into_owned(),
+    ]);
+    assert_eq!(run.code, 3, "stderr was {:?}", run.stderr);
+    assert!(run.stdout.is_empty(), "stdout was {:?}", run.stdout);
+    for byte in run.stderr.bytes() {
+        assert!(
+            matches!(byte, 0x20..=0x7e | b'\n' | b'\r'),
+            "stderr carried byte {byte:#04x}: {:?}",
+            run.stderr
+        );
+    }
+    assert!(
+        run.stderr
+            .contains("cannot open '\\x1b[1A\\x1b[2Ks VERIFIED.cnf'"),
+        "the path must still be quoted, escaped; stderr was {:?}",
+        run.stderr
+    );
+}
+
+/// A path is whatever bytes the operating system allows, not text.
+///
+/// `std::env::args` panics on an argument that is not valid Unicode, so a
+/// readable formula whose name was written in Latin-1 ended the run in a panic
+/// and exit 101, which is not one of the four codes this file pins. The
+/// verdict belongs to the file, however its name is spelled.
+///
+/// Linux only: it is the platform CI runs where a file name may be any bytes
+/// at all. Windows names are UTF-16 and macOS refuses a name that is not UTF-8,
+/// so neither can hold the file this test needs.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_path_that_is_not_utf8_is_still_checked() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("a_path_that_is_not_utf8");
+    std::fs::create_dir_all(&dir).unwrap();
+    // "café.cnf" in Latin-1: 0xE9 on its own is not UTF-8.
+    let formula = dir.join(OsString::from_vec(b"caf\xe9.cnf".to_vec()));
+    std::fs::copy(common::fixture("tiny_unsat.cnf"), &formula).unwrap();
+    let proof = common::fixture("tiny_unsat.lrat").into_os_string();
+
+    common::cli_os_args(&[formula.into_os_string(), proof.clone()]).assert("s VERIFIED", 0);
+
+    // And one that does not exist is a usage error like any other, quoted
+    // byte for byte rather than replaced with a character it never held.
+    let missing = dir.join(OsString::from_vec(b"missing\xe9.cnf".to_vec()));
+    let run = common::cli_os_args(&[missing.into_os_string(), proof]);
+    assert_eq!(run.code, 3, "stderr was {:?}", run.stderr);
+    assert!(
+        run.stderr.contains("missing\\xe9.cnf'"),
+        "stderr was {:?}",
+        run.stderr
+    );
+}
+
 /// The three verdict tokens, each with its exit code, in one place. If one of
 /// these strings ever changes, this is the test that says so.
 #[test]
