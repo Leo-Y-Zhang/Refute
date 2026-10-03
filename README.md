@@ -1,5 +1,7 @@
 # Refute
 
+**Try it:** [leo-y-zhang.github.io/Refute](https://leo-y-zhang.github.io/Refute/), a browser playground where your proof files never leave the tab
+
 An independent forward checker for DRAT and LRAT unsatisfiability proofs, in
 Rust, with no dependencies.
 
