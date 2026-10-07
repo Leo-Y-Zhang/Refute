@@ -17,8 +17,9 @@ vulnerability reporting is that channel.
 ## Scope
 
 These are personal projects published for evaluation, not operated services.
-There is no production deployment, no user data, and no infrastructure behind
-this repository. Reports about the code itself are welcome; there is no bug
+The only deployment is a static GitHub Pages build, which runs entirely in the
+visitor's browser: there is no server side, no user data, and no infrastructure
+behind this repository. Reports about the code itself are welcome; there is no bug
 bounty and no service-level commitment.
 
 ## What to expect
