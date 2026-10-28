@@ -42,12 +42,17 @@ import { fileURLToPath } from 'node:url';
 chdir(resolvePath(dirname(fileURLToPath(import.meta.url)), '..'));
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createPageServer } from './page_server.mjs';
+import {
+  MAX_LAUNCH_ATTEMPTS,
+  parseDevToolsActivePort,
+  shouldRetryLaunch,
+} from './browser_launch.mjs';
 
 const BROWSERS = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -253,7 +258,8 @@ async function until(predicate, { timeoutMs = 60000, everyMs = 100 } = {}) {
 
 // ---------------------------------------------------------------------------
 
-const profile = mkdtempSync(join(tmpdir(), 'refute-browser-'));
+let profile = null;
+let browser = null;
 
 // In this process, deliberately.
 //
@@ -312,44 +318,23 @@ if (server !== null) {
   }
 }
 
-const browser = spawn(
-  browserPath,
-  [
-    '--headless=new',
-    '--remote-debugging-port=9333',
-    '--disable-gpu',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-extensions',
-    '--disable-background-networking',
-    '--disable-component-update',
-    // A published page is fetched over the network like any other, so the
-    // browser must be allowed to reach it; nothing else here opens a
-    // connection, and every request is recorded and checked below anyway.
-    // No first-party requests to anywhere but our own server, so that a
-    // request to another origin is the page's doing and nothing else's.
-    '--disable-sync',
-    // Chrome's own sandbox cannot start in most CI containers, and a browser
-    // that will not start is a check that never runs. Only where CI says so,
-    // and never on a developer's machine.
-    ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
-    `--user-data-dir=${profile}`,
-    'about:blank',
-  ],
-  { stdio: ['ignore', 'ignore', 'ignore'] },
-);
-
-function shutdown() {
-  if (!keepOpen) {
-    browser.kill();
-  }
-  server?.close();
-  server?.closeAllConnections?.();
+function removeProfile() {
   try {
-    rmSync(profile, { recursive: true, force: true });
+    if (profile !== null) {
+      rmSync(profile, { recursive: true, force: true });
+    }
   } catch {
     // A profile directory the browser still holds open is not a test failure.
   }
+}
+
+function shutdown() {
+  if (!keepOpen) {
+    browser?.kill();
+  }
+  server?.close();
+  server?.closeAllConnections?.();
+  removeProfile();
 }
 
 // A backstop, not the plan. `exit` only fires once the event loop is empty,
@@ -359,19 +344,121 @@ function shutdown() {
 // called explicitly on both paths below.
 process.on('exit', shutdown);
 
-// The debugging port takes a moment to answer.
-stage = 'waiting for the browser debugging port';
-const targets = await until(async () => {
-  try {
-    const reply = await fetch('http://127.0.0.1:9333/json/list');
-    return await reply.json();
-  } catch {
-    return null;
+let targets = null;
+for (let attempt = 1; attempt <= MAX_LAUNCH_ATTEMPTS; attempt += 1) {
+  profile = mkdtempSync(join(tmpdir(), 'refute-browser-'));
+  stage = 'starting the browser';
+  browser = spawn(
+    browserPath,
+    [
+      '--headless=new',
+      '--remote-debugging-port=0',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-component-update',
+      // A published page is fetched over the network like any other, so the
+      // browser must be allowed to reach it; nothing else here opens a
+      // connection, and every request is recorded and checked below anyway.
+      // No first-party requests to anywhere but our own server, so that a
+      // request to another origin is the page's doing and nothing else's.
+      '--disable-sync',
+      // Chrome's own sandbox cannot start in most CI containers, and a browser
+      // that will not start is a check that never runs. Only where CI says so,
+      // and never on a developer's machine.
+      ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
+      `--user-data-dir=${profile}`,
+      'about:blank',
+    ],
+    { stdio: ['ignore', 'ignore', 'pipe'] },
+  );
+
+  // Drain our own pipe, never inherit a CI pipe. Keep only the last 64 KiB.
+  let stderrTail = Buffer.alloc(0);
+  browser.stderr.on('data', (chunk) => {
+    stderrTail = Buffer.concat([stderrTail, chunk]);
+    if (stderrTail.length > 64 * 1024) {
+      stderrTail = Buffer.from(stderrTail.subarray(-64 * 1024));
+    }
+  });
+  let launchFailure = null;
+  let launchError = null;
+  const failed = new Promise((resolve) => {
+    browser.once('exit', () => {
+      launchFailure = 'exit';
+      resolve(launchFailure);
+    });
+    browser.once('error', (error) => {
+      launchError = error;
+      launchFailure = 'error';
+      resolve(launchFailure);
+    });
+  });
+  const closed = new Promise((resolve) => browser.once('close', resolve));
+  const controller = new AbortController();
+
+  // A fresh profile supplies the browser's chosen port, never a shared one.
+  // Race each request with exit as well as until's deadline: a browser that
+  // dies while a request is pending must fail promptly too.
+  stage = 'waiting for the browser debugging port';
+  const result = await until(async () => {
+    if (launchFailure !== null) {
+      return launchFailure;
+    }
+    const debuggingPort = parseDevToolsActivePort(
+      readFileSync(join(profile, 'DevToolsActivePort'), 'utf8'),
+    );
+    if (debuggingPort === null) {
+      return null;
+    }
+    stage = 'waiting for the browser debugging targets';
+    return await Promise.race([
+      failed,
+      fetch(`http://127.0.0.1:${debuggingPort}/json/list`, {
+        signal: controller.signal,
+      }).then(async (reply) => ({ targets: await reply.json() })),
+    ]);
+  }, { timeoutMs: 30000 });
+  controller.abort();
+
+  if (result !== null && typeof result === 'object') {
+    targets = result.targets;
+    break;
   }
-}, { timeoutMs: 30000 });
+
+  const outcome = result ?? 'timeout';
+  console.error(
+    `browser launch attempt ${attempt}/${MAX_LAUNCH_ATTEMPTS} failed: ` +
+      `${stage} (${outcome}); exit code ${browser.exitCode}, signal ${browser.signalCode}`,
+  );
+  if (launchError !== null) {
+    console.error(String(launchError));
+  }
+  browser.kill('SIGKILL');
+  // Exit can precede the last stderr data. Drain it, with a bound in case a
+  // descendant retained the pipe, then close our end before the next attempt.
+  await Promise.race([closed, sleep(1000)]);
+  browser.stderr.destroy();
+  // Await the write: process.exit() can truncate a large diagnostic in a pipe.
+  await new Promise((resolve) => {
+    process.stderr.write(
+      `browser stderr (tail):\n${stderrTail.toString('utf8') || '(empty)'}\n`,
+      resolve,
+    );
+  });
+  removeProfile();
+  if (!shouldRetryLaunch(attempt, outcome)) {
+    break;
+  }
+}
 
 if (targets === null) {
-  console.error('the browser never opened its debugging port');
+  await new Promise((resolve) => {
+    process.stderr.write('the browser never opened its debugging port\n', resolve);
+  });
+  shutdown();
   process.exit(1);
 }
 
