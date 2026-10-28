@@ -139,6 +139,7 @@ jobs:
       # message names, and that a message it cannot read gets an error rather
       # than a verdict.
       - run: node tools/worker_contract.mjs
+      - run: node --test tools/browser_launch.test.mjs
       - name: Install the pinned toolchain with the wasm32 target
         run: |
           rustup toolchain install 1.97.1 --profile minimal \
