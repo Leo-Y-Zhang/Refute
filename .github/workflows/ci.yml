@@ -26,7 +26,7 @@ jobs:
     steps:
       # Pinned to a commit, not a tag: a tag is a moving pointer someone
       # else controls, and this workflow runs on every push.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned toolchain
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
@@ -54,7 +54,7 @@ jobs:
     steps:
       # Pinned to a commit, not a tag: a tag is a moving pointer someone
       # else controls, and this workflow runs on every push.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install ${{ matrix.toolchain }}
         run: |
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal
@@ -92,7 +92,7 @@ jobs:
     steps:
       # Pinned to a commit, not a tag: a tag is a moving pointer someone
       # else controls, and this workflow runs on every push.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install ${{ matrix.toolchain }} with the wasm32 target
         run: |
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal \
@@ -131,7 +131,7 @@ jobs:
     steps:
       # Pinned to a commit, not a tag: a tag is a moving pointer someone
       # else controls, and this workflow runs on every push.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Before anything is built, because it needs nothing built. The browser
       # check below proves no request leaves the origin on the paths a reader
       # travels; this proves the two properties that hold it up on the paths a
