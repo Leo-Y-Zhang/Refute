@@ -20,7 +20,8 @@ an absence but a claim, that the lemma's pivot has no resolution candidate, and
 which Refute accepts only after establishing that for itself.
 
 The format is detected from the head of the proof, and the two grammars are
-disjoint on every file in the corpus. Nothing is guessed silently: `--drat` and
+disjoint on every file in the corpus. If the first 1,024 bytes do not identify
+a unique text format, detection silently defaults to LRAT. `--drat` and
 `--lrat` force the choice, and a file forced into the wrong reader is rejected
 rather than reinterpreted.
 
@@ -117,9 +118,10 @@ polling the OS every 5 ms, on a release build:
 The store holds the **live** clause database and a fixed 12 bytes per addition
 ever made — never the proof's length. It was not always so: the same proof
 peaked at 182.6 MB before this was measured, of which 170 MB was clauses the
-proof had already deleted. `--stats` reports the figure on your own proof, so
-this is checkable rather than quotable, and `tools/scale.sh` re-measures the
-whole table.
+proof had already deleted. `--stats` reports counters and an estimate of the
+DRAT store's final allocations on your own proof, using container capacities
+and a model for the deletion-index hash table; it does not measure peak process
+memory. `tools/scale.sh` re-measures the whole table.
 
 Nothing above is in CI, which has no solver. What *is* in CI is the property
 those numbers are consequences of, asserted as counters on committed fixtures:
@@ -406,10 +408,14 @@ native on the largest artefact measured.
 ## The property this is all in service of
 
 `s VERIFIED` is printed only when a checked sequence of steps derives the empty
-clause from the parsed formula. It is enforced structurally, not by discipline:
-`Verdict::Verified` has no public constructor, no `Default` and no `From`, and
-is built at exactly one site in the library. A test reads the source and fails
-the build if a second site ever appears.
+clause from the parsed formula. `Verdict::Verified` is a public unit variant
+that any caller can construct directly; it has no `Default` or `From`
+implementation. Within the library, the current checkers construct it through
+one helper that takes a crate-private empty-clause witness. The trust-boundary
+tests inspect source text for expected construction spellings, witness sites
+and the absence of `Default`/`From` implementations; these are source-pattern
+guards, not a Rust type-system guarantee that a `Verified` value came from
+checking.
 
 A false `VERIFIED` is the only serious defect this project can have. It would
 launder a wrong theorem into a published one. Every rule resolves toward
